@@ -2,6 +2,7 @@
 pragma solidity ^0.8.9;
 
 import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "./YAGMI.sol";
 
 enum YAGMIStatus {
@@ -10,6 +11,7 @@ enum YAGMIStatus {
     // ACCEPTED,
     MINT_OPEN,
     MINT_CLOSED,
+    THRESHOLD_MET,
     ONGOING,
     FINISHED,
     CANCELED
@@ -55,20 +57,41 @@ contract YAGMIController is AccessControl {
     bytes32 public constant CHAMPION = keccak256("CHAMPION_ROLE");
 
     /** State Variables */
+
+    // current NFT id counter
     uint256 public currentId;
+    // NFT Contract
     YAGMI public yagmi;
-
+    // Properties for each NFT TokenId
     mapping(uint256 => YAGMIProps) public tokens;
-
+    // Profile for each user
     mapping(address => ProfileProps) public profiles;
+    // Properties for each champinon
     mapping(address => ChampionProps) public champions;
+    // Properties for each sponsor
     mapping(address => SponsorProps) public sponsors;
-    mapping(address => mapping(address => uint256)) sponsorBalance;
-    mapping(address => mapping(address => uint256)) sponsorLocked;
-
-    // Mapping (sponsor => mapping (erc20 => balance) )
+    // Balance available of each ERC20, for each sponsor (ERC20 => sponsor => balance)
+    mapping(address => mapping(address => uint256)) sponsorAvailableBalance;
+    // Balance locked of each ERC20, for each sponsor (ERC20 => sponsor => balance)
+    mapping(address => mapping(address => uint256)) sponsorLockedBalance;
 
     /** Events */
+    event NewChampion(
+        address indexed sponsor,
+        address indexed champion,
+        uint256 indexed tokenId,
+        uint256 depositAmount
+    );
+
+    event MintOpen(uint256 indexed tokenId);
+
+    event CanceledSponsorship(
+        address indexed sponsor,
+        address indexed champion,
+        uint256 indexed tokenId
+    );
+
+    event ThresholdMet(uint256 indexed tokenId);
 
     /** Functions */
     constructor(address adminWallet) {
@@ -82,13 +105,15 @@ contract YAGMIController is AccessControl {
         uint64 price,
         uint32 maxSupply,
         uint32 apy,
-        address erc20
-    ) public onlyRole(SPONSOR) {
-        // require (Sponsor can propose a champion)
-        uint256 balance = sponsorBalance[msg.sender][erc20];
+        address erc20,
+        uint256 depositAmount
+    ) public onlyRole(SPONSOR) returns (uint256 tokenId) {
         SponsorProps memory sponsor = sponsors[msg.sender];
-        require(maxSupply * price <= sponsor.ratio * balance);
+        // Check ratio of sponsor for champion
+        require(maxSupply * price == sponsor.ratio * depositAmount);
 
+        // Set Props for the NFT of the champion
+        tokenId = currentId;
         tokens[currentId] = YAGMIProps(
             champion,
             price,
@@ -102,26 +127,121 @@ contract YAGMIController is AccessControl {
         grantRole(CHAMPION, champion);
         currentId++;
 
-        // Move money
+        // Update balanceLocked of sponsor
+        sponsorLockedBalance[erc20][msg.sender] += depositAmount;
+
+        // Verify we have enough allowance to receive the depositAmount
+        uint256 currentAllowance = IERC20(erc20).allowance(
+            msg.sender,
+            address(this)
+        );
+        if (currentAllowance < depositAmount)
+            require(
+                IERC20(erc20).approve(address(this), depositAmount),
+                "Approve failed"
+            );
+
+        // Receive the depositAmount of erc20 tokens
+        require(
+            IERC20(erc20).transferFrom(
+                msg.sender,
+                address(this),
+                depositAmount
+            ),
+            "ERC20 transfer failed"
+        );
+
+        // Emit events
+        emit NewChampion(msg.sender, champion, tokenId, depositAmount);
+    }
+
+    function openMint(uint256 tokenId) public onlyRole(SPONSOR) {
+        // Check that sponsor can open this mint
+        YAGMIProps memory nftProps = tokens[tokenId];
+        require(nftProps.sponsor == msg.sender, "Token has another sponsor");
+        require(
+            nftProps.status == YAGMIStatus.PROPOSED,
+            "Not in PROPOSED Status"
+        );
+
+        // Open mint for token
+        tokens[tokenId].status = YAGMIStatus.MINT_OPEN;
+
+        // Emit events
+        emit MintOpen(tokenId);
+    }
+
+    function cancelSponsorship(uint256 tokenId) public onlyRole(SPONSOR) {
+        // Check that sponsor can open this mint
+        YAGMIProps memory nftProps = tokens[tokenId];
+        require(nftProps.sponsor == msg.sender, "Token has another sponsor");
+        require(
+            nftProps.status == YAGMIStatus.MINT_OPEN,
+            "Not in MINT_OPEN Status"
+        );
+        require(
+            yagmi.totalSupply(tokenId) == 0,
+            "Can't cancel w/totalSupply > 0"
+        );
+
+        // Open mint for token
+        tokens[tokenId].status = YAGMIStatus.CANCELED;
+
+        // Emit events
+        emit CanceledSponsorship(msg.sender, nftProps.champion, tokenId);
     }
 
     // Mint function ( require totalSupply(id)+amount <= maxSupply(id) )
     function mint(uint256 id, uint256 amount) public {
-        // TODO: require mint conditions
-        // TODO: ERC20 transfer
+        YAGMIProps memory nftProps = tokens[id];
 
-        require(tokens[id].status == YAGMIStatus.MINT_OPEN);
+        require(nftProps.status == YAGMIStatus.MINT_OPEN, "Minting Not Open");
+        uint256 currentSupply = yagmi.totalSupply(id);
+        require(
+            nftProps.maxSupply >= currentSupply + amount,
+            "Amount exceeds maxSupply left"
+        );
 
         yagmi.mint(msg.sender, id, amount, "");
+
+        // Update status to if Threshold is met
+        if (nftProps.maxSupply == currentSupply + amount) {
+            tokens[id].status = YAGMIStatus.THRESHOLD_MET;
+            // emit events
+            emit ThresholdMet(id);
+        }
+
+        // Verify we have enough allowance to receive the depositAmount
+        uint256 totalPrice = nftProps.price * amount;
+        uint256 currentAllowance = IERC20(nftProps.erc20).allowance(
+            msg.sender,
+            address(this)
+        );
+        if (currentAllowance < totalPrice)
+            require(
+                IERC20(nftProps.erc20).approve(address(this), totalPrice),
+                "Approve failed"
+            );
+
+        // Receive the depositAmount of erc20 tokens
+        require(
+            IERC20(nftProps.erc20).transferFrom(
+                msg.sender,
+                address(this),
+                totalPrice
+            ),
+            "ERC20 transfer failed"
+        );
     }
 
-    // IN PROGRESS: setup initial tokenId properties (maxSupply, return %, etc)
-    // IN PROGRESS: mint function
+    // DONE: setup initial tokenId properties (maxSupply, return %, etc)
+    // DONE: mint function
+    // DONE: ERC20 allowance before mint (Supporter approves ERC20 to spend)
 
-    // TODO: ERC20 allowance before mint (Supporter approves ERC20 to spend)
+    // IN PROGRESS: changeTokenIdStatus (PROPOSED -> MINT_OPEN -> ... -> FINISHED)
+
     // TODO: Burn function and its conditions
     // TODO: setUri function
-    // TODO: changeTokenIdStatus (PROPOSED -> MINT_OPEN -> ... -> FINISHED)
     // TODO: Chainlink trigger Functions
     // TODO: Incentives of different apy for staking
 }
