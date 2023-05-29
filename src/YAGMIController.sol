@@ -44,14 +44,17 @@ struct YAGMIProps {
     address champion; // 160 | Address of the champion
     uint64 price; //  64 | Price of each token in wei
     uint32 maxSupply; //  32 | Max amount of tokens to mint
+    // 256 bits -> 1 register
     address sponsor; // 160 | Address of the DAO / sponsor for the champion
     uint32 apy; //  32 | % apy, 6 digits of precision (4000000 = 4.000000 %)
+    uint16 interestProportion; // 16 | in 1/1000 of apy, to apply daily interest for late payments
     uint16 daysToFirstPayment; //  16 | Days for first payment of champion starting from the date the loan was withdrawn
     uint16 paymentFreqInDays; //  16 | Payments frequency for the champion
     uint8 numberOfpayments; //   8 | Number of payments the champion is going to do to return the loan
     uint8 ratioUsed; //   8 | Ratio used when proposing the champion
-    YAGMIStatus status; //   8 | Status of tokens
+    // 256 bits -> 1 register
     address erc20; // 160 | ERC20 to use for token payments/returns
+    YAGMIStatus status; //   8 | Status of tokens
 }
 
 contract YAGMIController is AccessControl {
@@ -142,12 +145,13 @@ contract YAGMIController is AccessControl {
             maxSupply,
             msg.sender,
             apy,
+            interestProportion,
             daysToFirstPayment,
             paymentFreqInDays,
             numberOfpayments,
             sponsors[msg.sender].ratio,
-            YAGMIStatus.PROPOSED,
-            erc20
+            erc20,
+            YAGMIStatus.PROPOSED
         );
         grantRole(CHAMPION, champion);
         currentId++;
