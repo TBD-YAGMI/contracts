@@ -41,14 +41,17 @@ struct ChampionProps {
 }
 
 struct YAGMIProps {
-    address champion; // Address of the champion
-    uint64 price; // Price of each token in wei
-    uint32 maxSupply; // Max amount of tokens to mint
-    address sponsor; // Address of the DAO / sponsor for the champion
-    uint32 apy; // % apy, 6 digits of precision (4000000 = 4.000000 %)
-    YAGMIStatus status; // Status of tokens
-    address erc20; // ERC20 to use for token payments/returns
-    uint256 ratioUsed; // Ratio used when proposing
+    address champion; // 160 | Address of the champion
+    uint64 price; //  64 | Price of each token in wei
+    uint32 maxSupply; //  32 | Max amount of tokens to mint
+    address sponsor; // 160 | Address of the DAO / sponsor for the champion
+    uint32 apy; //  32 | % apy, 6 digits of precision (4000000 = 4.000000 %)
+    uint16 daysToFirstPayment; //  16 | Days for first payment of champion starting from the date the loan was withdrawn
+    uint16 paymentFreqInDays; //  16 | Payments frequency for the champion
+    uint8 numberOfpayments; //   8 | Number of payments the champion is going to do to return the loan
+    uint8 ratioUsed; //   8 | Ratio used when proposing the champion
+    YAGMIStatus status; //   8 | Status of tokens
+    address erc20; // 160 | ERC20 to use for token payments/returns
 }
 
 contract YAGMIController is AccessControl {
@@ -60,6 +63,8 @@ contract YAGMIController is AccessControl {
 
     // current NFT id counter
     uint256 public currentId;
+    // Interest Rate for late payments of champion, as 1/1000 parts of apy
+    uint16 public interestProportion;
     // NFT Contract
     YAGMI public yagmi;
     // Properties for each NFT TokenId
@@ -71,9 +76,10 @@ contract YAGMIController is AccessControl {
     // Properties for each sponsor
     mapping(address => SponsorProps) public sponsors;
     // Balance available of each ERC20, for each sponsor (ERC20 => sponsor => balance)
-    mapping(address => mapping(address => uint256)) sponsorAvailableBalance;
+    mapping(address => mapping(address => uint256))
+        public sponsorAvailableBalance;
     // Balance locked of each ERC20, for each sponsor (ERC20 => sponsor => balance)
-    mapping(address => mapping(address => uint256)) sponsorLockedBalance;
+    mapping(address => mapping(address => uint256)) public sponsorLockedBalance;
 
     /** Events */
     event NewChampion(
@@ -104,9 +110,12 @@ contract YAGMIController is AccessControl {
         address champion,
         uint64 price,
         uint32 maxSupply,
-        uint32 apy,
+        uint256 depositAmount,
         address erc20,
-        uint256 depositAmount
+        uint32 apy,
+        uint16 daysToFirstPayment,
+        uint16 paymentFreqInDays,
+        uint8 numberOfpayments
     ) public onlyRole(SPONSOR) returns (uint256 tokenId) {
         SponsorProps memory sponsor = sponsors[msg.sender];
         // Check ratio of sponsor for champion
@@ -120,9 +129,12 @@ contract YAGMIController is AccessControl {
             maxSupply,
             msg.sender,
             apy,
+            daysToFirstPayment,
+            paymentFreqInDays,
+            numberOfpayments,
+            sponsors[msg.sender].ratio,
             YAGMIStatus.PROPOSED,
-            erc20,
-            sponsors[msg.sender].ratio
+            erc20
         );
         grantRole(CHAMPION, champion);
         currentId++;
@@ -204,7 +216,7 @@ contract YAGMIController is AccessControl {
 
         yagmi.mint(msg.sender, id, amount, "");
 
-        // Update status to if Threshold is met
+        // Update status if Threshold is met
         if (nftProps.maxSupply == currentSupply + amount) {
             tokens[id].status = YAGMIStatus.THRESHOLD_MET;
             // emit events
@@ -240,7 +252,7 @@ contract YAGMIController is AccessControl {
 
     // IN PROGRESS: changeTokenIdStatus (PROPOSED -> MINT_OPEN -> ... -> FINISHED)
 
-    // TODO: Burn function and its conditions
+    // TODO: Burn function to recover investment and its conditions
     // TODO: setUri function
     // TODO: Chainlink trigger Functions
     // TODO: Incentives of different apy for staking
