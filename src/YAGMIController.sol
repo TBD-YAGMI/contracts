@@ -53,8 +53,11 @@ struct YAGMIProps {
     uint8 numberOfpayments; //   8 | Number of payments the champion is going to do to return the loan
     uint8 ratioUsed; //   8 | Ratio used when proposing the champion
     // 256 bits -> 1 register
+    uint256 loanTaken; // 256 | Timestamp of moment the champion withdrew the loan
+    // 256 bits -> 1 register
     address erc20; // 160 | ERC20 to use for token payments/returns
     YAGMIStatus status; //   8 | Status of tokens
+    uint8 paymentsDone; //   8 | Number of payments the champion already payed back
 }
 
 contract YAGMIController is AccessControl {
@@ -150,6 +153,7 @@ contract YAGMIController is AccessControl {
             paymentFreqInDays,
             numberOfpayments,
             sponsors[msg.sender].ratio,
+            0, // block.timestamp will be used the moment the champion withdraws
             erc20,
             YAGMIStatus.PROPOSED
         );
@@ -261,6 +265,38 @@ contract YAGMIController is AccessControl {
             ),
             "ERC20 transfer failed"
         );
+    }
+
+    // How much is due for a given number of payment
+    function amountOwed(
+        uint256 tokenId,
+        uint8 payment,
+        uint256 timestamp
+    ) public view returns (uint256) {
+        YAGMIProps memory nftProps = tokens[tokenId];
+
+        if (
+            payment <= nftProps.paymentsDone ||
+            payment > nftProps.numberOfpayments
+        ) return 0;
+
+        uint256 dueDate = nftProps.loanTaken +
+            nftProps.daysToFirstPayment *
+            1 days +
+            (payment - 1) *
+            nftProps.paymentFreqInDays *
+            1 days;
+
+        uint256 interestDays = 0;
+        if (timestamp > dueDate) interestDays = (timestamp - dueDate) / 1 days;
+
+        uint256 basePay = (nftProps.price * nftProps.maxSupply) /
+            nftProps.numberOfpayments;
+
+        return
+            (basePay + basePay * nftProps.apy) * // installment + apy
+            ((1 + ((nftProps.apy * nftProps.interestProportion) / 1000)) ** // interest
+                interestDays); // to the power of days late
     }
 
     // DONE: setup initial tokenId properties (maxSupply, return %, etc)
