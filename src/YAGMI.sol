@@ -31,6 +31,15 @@ contract YAGMI is ERC1155, Ownable, ERC1155Burnable, ERC1155Supply {
         _mintBatch(to, ids, amounts, data);
     }
 
+    // To be called only from owner, when investors recover their investment
+    function burnOnlyOwner(
+        address account,
+        uint256 id,
+        uint256 value
+    ) public onlyOwner() {
+        _burn(account, id, value);
+    }
+
     // The following functions are overrides required by Solidity.
 
     function _beforeTokenTransfer(
