@@ -99,11 +99,24 @@ contract YAGMIController is AccessControl {
 
     event ThresholdMet(uint256 indexed tokenId);
 
+    event NewInterestProportion(
+        uint16 indexed oldInterestProportion,
+        uint16 indexed newInterestProportion
+    );
+
     /** Functions */
     constructor(address adminWallet) {
         _grantRole(DEFAULT_ADMIN_ROLE, adminWallet);
         _setRoleAdmin(CHAMPION, SPONSOR);
         yagmi = new YAGMI();
+        interestProportion = 20; // Starts at 2% (Ex: if apy=10% =>  Daily Interest is 0.2%)
+    }
+
+    function setInterestProportion(
+        uint16 newInterestProportion
+    ) public onlyRole(DEFAULT_ADMIN_ROLE) {
+        interestProportion = newInterestProportion;
+        emit NewInterestProportion(interestProportion, newInterestProportion);
     }
 
     function proposeChampion(
