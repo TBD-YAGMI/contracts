@@ -281,22 +281,28 @@ contract YAGMIController is AccessControl {
         ) return 0;
 
         uint256 dueDate = nftProps.loanTaken +
-            nftProps.daysToFirstPayment *
+            uint256(nftProps.daysToFirstPayment) *
             1 days +
-            (payment - 1) *
-            nftProps.paymentFreqInDays *
+            (uint256(payment) - 1) *
+            uint256(nftProps.paymentFreqInDays) *
             1 days;
 
         uint256 interestDays = 0;
         if (timestamp > dueDate) interestDays = (timestamp - dueDate) / 1 days;
 
-        uint256 basePay = (nftProps.price * nftProps.maxSupply) /
-            nftProps.numberOfpayments;
+        uint256 basePay = (uint256(nftProps.price) *
+            uint256(nftProps.maxSupply)) / uint256(nftProps.numberOfpayments);
 
         return
-            (basePay + basePay * nftProps.apy) * // installment + apy
-            ((1 + ((nftProps.apy * nftProps.interestProportion) / 1000)) ** // interest
+            (basePay + basePay * uint256(nftProps.apy)) * // installment + apy
+            ((1 +
+                ((uint256(nftProps.apy) *
+                    uint256(nftProps.interestProportion)) / 1000)) ** // interest
                 interestDays); // to the power of days late
+    }
+
+    function setURI(string memory newuri) public onlyRole(DEFAULT_ADMIN_ROLE) {
+        yagmi.setURI(newuri);
     }
 
     // DONE: setup initial tokenId properties (maxSupply, return %, etc)
