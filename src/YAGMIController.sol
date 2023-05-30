@@ -41,23 +41,29 @@ struct ChampionProps {
 }
 
 struct YAGMIProps {
-    address champion; // 160 | Address of the champion
-    uint64 price; //  64 | Price of each token in wei
-    uint32 maxSupply; //  32 | Max amount of tokens to mint
+    address champion; // Address of the champion
+    uint32 maxSupply; // Max amount of tokens to mint
+    uint32 apy; // % apy, 6 digits of precision (4000000 = 4.000000 %)
+    uint16 daysToFirstPayment; // Days for first payment of champion starting from the date the loan was withdrawn
+    uint16 paymentFreqInDays; // Payments frequency for the champion
     // 256 bits -> 1 register
-    address sponsor; // 160 | Address of the DAO / sponsor for the champion
-    uint32 apy; //  32 | % apy, 6 digits of precision (4000000 = 4.000000 %)
-    uint16 interestProportion; // 16 | in 1/1000 of apy, to apply daily interest for late payments
-    uint16 daysToFirstPayment; //  16 | Days for first payment of champion starting from the date the loan was withdrawn
-    uint16 paymentFreqInDays; //  16 | Payments frequency for the champion
-    uint8 numberOfpayments; //   8 | Number of payments the champion is going to do to return the loan
-    uint8 ratioUsed; //   8 | Ratio used when proposing the champion
+
+    uint256 price; // Price of each token in wei
     // 256 bits -> 1 register
-    uint256 loanTaken; // 256 | Timestamp of moment the champion withdrew the loan
+
+    uint256 loanTaken; // Timestamp of moment the champion withdrew the loan
     // 256 bits -> 1 register
-    address erc20; // 160 | ERC20 to use for token payments/returns
-    YAGMIStatus status; //   8 | Status of tokens
-    uint8 paymentsDone; //   8 | Number of payments the champion already payed back
+
+    address sponsor; // Address of the DAO / sponsor for the champion
+    // 160 bits -> 1 register
+
+    address erc20; // ERC20 to use for token payments/returns
+    uint16 interestProportion; // in 1/1000 of apy, to apply daily interest for late payments
+    uint16 numberOfPayments; // Number of payments the champion is going to do to return the loan
+    uint16 paymentsDone; // Number of payments the champion already payed back
+    uint16 ratio; // Ratio used when proposing the champion
+    YAGMIStatus status; // Status of tokens
+    // 232 bits -> 1 register
 }
 
 contract YAGMIController is AccessControl {
@@ -127,36 +133,32 @@ contract YAGMIController is AccessControl {
 
     function proposeChampion(
         address champion,
-        uint64 price,
         uint32 maxSupply,
-        uint256 depositAmount,
+        uint256 price,
         address erc20,
         uint32 apy,
         uint16 daysToFirstPayment,
         uint16 paymentFreqInDays,
-        uint8 numberOfpayments
+        uint8 numberOfPayments
     ) public onlyRole(SPONSOR) returns (uint256 tokenId) {
         SponsorProps memory sponsor = sponsors[msg.sender];
-        // Check ratio of sponsor for champion
-        require(maxSupply * price == sponsor.ratio * depositAmount);
+        uint256 depositAmount = (price * maxSupply) / sponsor.ratio;
 
         // Set Props for the NFT of the champion
         tokenId = currentId;
-        tokens[currentId] = YAGMIProps(
-            champion,
-            price,
-            maxSupply,
-            msg.sender,
-            apy,
-            interestProportion,
-            daysToFirstPayment,
-            paymentFreqInDays,
-            numberOfpayments,
-            sponsors[msg.sender].ratio,
-            0, // block.timestamp will be used the moment the champion withdraws
-            erc20,
-            YAGMIStatus.PROPOSED
-        );
+        tokens[currentId].champion = champion;
+        tokens[currentId].price = price;
+        tokens[currentId].maxSupply = maxSupply;
+        tokens[currentId].sponsor = msg.sender;
+        tokens[currentId].apy = apy;
+        tokens[currentId].interestProportion = interestProportion;
+        tokens[currentId].daysToFirstPayment = daysToFirstPayment;
+        tokens[currentId].paymentFreqInDays = paymentFreqInDays;
+        tokens[currentId].numberOfPayments = numberOfPayments;
+        tokens[currentId].ratio = sponsors[msg.sender].ratio;
+        tokens[currentId].erc20 = erc20;
+        tokens[currentId].status = YAGMIStatus.PROPOSED;
+
         grantRole(CHAMPION, champion);
         currentId++;
 
@@ -277,7 +279,7 @@ contract YAGMIController is AccessControl {
 
         if (
             payment <= nftProps.paymentsDone ||
-            payment > nftProps.numberOfpayments
+            payment > nftProps.numberOfPayments
         ) return 0;
 
         uint256 dueDate = nftProps.loanTaken +
@@ -292,7 +294,7 @@ contract YAGMIController is AccessControl {
 
         // TODO: Add support for changes in debt when inverstors donate (burn)
         uint256 basePay = (uint256(nftProps.price) *
-            uint256(nftProps.maxSupply)) / uint256(nftProps.numberOfpayments);
+            uint256(nftProps.maxSupply)) / uint256(nftProps.numberOfPayments);
 
         return
             (basePay + basePay * uint256(nftProps.apy)) * // installment + apy
