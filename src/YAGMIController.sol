@@ -290,6 +290,7 @@ contract YAGMIController is AccessControl {
         uint256 interestDays = 0;
         if (timestamp > dueDate) interestDays = (timestamp - dueDate) / 1 days;
 
+        // TODO: Add support for changes in debt when inverstors donate (burn)
         uint256 basePay = (uint256(nftProps.price) *
             uint256(nftProps.maxSupply)) / uint256(nftProps.numberOfpayments);
 
@@ -308,11 +309,12 @@ contract YAGMIController is AccessControl {
     // DONE: setup initial tokenId properties (maxSupply, return %, etc)
     // DONE: mint function
     // DONE: ERC20 allowance before mint (Supporter approves ERC20 to spend)
+    // DONE: setUri function
+    // DONE: amountOwed function
 
     // IN PROGRESS: changeTokenIdStatus (PROPOSED -> MINT_OPEN -> ... -> FINISHED)
 
     // TODO: Burn function to recover investment and its conditions
-    // TODO: setUri function
     // TODO: Chainlink trigger Functions
     // TODO: Incentives of different apy for staking
 }
