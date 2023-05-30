@@ -8,11 +8,10 @@ import "./YAGMI.sol";
 enum YAGMIStatus {
     EMPTY,
     PROPOSED,
-    // ACCEPTED,
     MINT_OPEN,
-    MINT_CLOSED,
     THRESHOLD_MET,
-    ONGOING,
+    LOANED,
+    BURN_OPEN, // Also means Sponsor Deposit is Claimable
     FINISHED,
     CANCELED
 }
@@ -134,12 +133,12 @@ contract YAGMIController is AccessControl {
     function proposeChampion(
         address champion,
         uint32 maxSupply,
+        uint32 apy,
+        uint16 paymentFreqInDays,
+        uint16 numberOfPayments,
         uint256 price,
         address erc20,
-        uint32 apy,
-        uint16 daysToFirstPayment,
-        uint16 paymentFreqInDays,
-        uint8 numberOfPayments
+        uint16 daysToFirstPayment
     ) public onlyRole(SPONSOR) returns (uint256 tokenId) {
         SponsorProps memory sponsor = sponsors[msg.sender];
         uint256 depositAmount = (price * maxSupply) / sponsor.ratio;
@@ -269,6 +268,28 @@ contract YAGMIController is AccessControl {
         );
     }
 
+    function withdrawLoan(uint256 tokenId) public onlyRole(CHAMPION) {
+        // check the tokenId is for msg.sender and the threshold has been met
+        YAGMIProps memory nftProps = tokens[tokenId];
+        require(
+            nftProps.champion == msg.sender,
+            "Not the champion of the tokenId"
+        );
+        require(nftProps.status == YAGMIStatus.THRESHOLD_MET);
+
+        tokens[tokenId].status = YAGMIStatus.LOANED;
+        tokens[tokenId].loanTaken = block.timestamp;
+
+        // Approve loanAmount of erc20 tokens to msg.sender
+        uint256 loanAmount = nftProps.price * nftProps.maxSupply;
+
+        // Tranfer loanAmount of erc20 tokens to champion
+        require(
+            IERC20(nftProps.erc20).transfer(msg.sender, loanAmount),
+            "ERC20 transfer failed"
+        );
+    }
+
     // How much is due for a given number of payment
     function amountOwed(
         uint256 tokenId,
@@ -313,8 +334,11 @@ contract YAGMIController is AccessControl {
     // DONE: ERC20 allowance before mint (Supporter approves ERC20 to spend)
     // DONE: setUri function
     // DONE: amountOwed function
+    // DONE: withdrawLoan function
 
     // IN PROGRESS: changeTokenIdStatus (PROPOSED -> MINT_OPEN -> ... -> FINISHED)
+    //    DONE:        EMPTY -> PROPOSED -> MINT_OPEN -> CANCELED
+    //    IN PROGRESS: EMPTY -> PROPOSED -> MINT_OPEN -> THRESHOLD_MET -> LOANED ->? BURN_OPEN ->? FINISHED
 
     // TODO: Burn function to recover investment and its conditions
     // TODO: Chainlink trigger Functions
