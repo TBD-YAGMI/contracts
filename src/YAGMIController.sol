@@ -53,6 +53,9 @@ struct YAGMIProps {
     uint256 loanTaken; // Timestamp of moment the champion withdrew the loan
     // 256 bits -> 1 register
 
+    uint256 returnedAmount; // Timestamp of moment the champion withdrew the loan
+    // 256 bits -> 1 register
+
     address sponsor; // Address of the DAO / sponsor for the champion
     // 160 bits -> 1 register
 
@@ -82,7 +85,7 @@ contract YAGMIController is AccessControl {
     mapping(uint256 => YAGMIProps) public tokens;
     // Profile for each user
     mapping(address => ProfileProps) public profiles;
-    // Properties for each champinon
+    // Properties for each champion
     mapping(address => ChampionProps) public champions;
     // Properties for each sponsor
     mapping(address => SponsorProps) public sponsors;
@@ -293,16 +296,31 @@ contract YAGMIController is AccessControl {
     // How much is due for a given number of payment
     function amountOwed(
         uint256 tokenId,
-        uint8 payment,
+        uint16 payment,
         uint256 timestamp
     ) public view returns (uint256) {
         YAGMIProps memory nftProps = tokens[tokenId];
 
+        // If number of payment out of range, return 0
         if (
             payment <= nftProps.paymentsDone ||
             payment > nftProps.numberOfPayments
         ) return 0;
 
+        // Calculate original base payment without changes
+        uint256 basePay = (nftProps.price * uint256(nftProps.maxSupply)) /
+            uint256(nftProps.numberOfPayments);
+
+        // Check if there has been changes in the supply of the tokens that change the debt
+        uint256 totalAmountReturned = basePay * nftProps.paymentsDone;
+        uint256 tokensLeft = yagmi.totalSupply(tokenId);
+        uint256 updatedLoanedAmount = tokensLeft * nftProps.price;
+
+        if (totalAmountReturned >= updatedLoanedAmount) return 0;
+        if (updatedLoanedAmount - totalAmountReturned < basePay)
+            basePay = updatedLoanedAmount - totalAmountReturned;
+
+        // Calculate days to payment and interest days
         uint256 dueDate = nftProps.loanTaken +
             uint256(nftProps.daysToFirstPayment) *
             1 days +
@@ -310,13 +328,10 @@ contract YAGMIController is AccessControl {
             uint256(nftProps.paymentFreqInDays) *
             1 days;
 
-        uint256 interestDays = 0;
+        uint256 interestDays;
         if (timestamp > dueDate) interestDays = (timestamp - dueDate) / 1 days;
 
-        // TODO: Add support for changes in debt when inverstors donate (burn)
-        uint256 basePay = (uint256(nftProps.price) *
-            uint256(nftProps.maxSupply)) / uint256(nftProps.numberOfPayments);
-
+        // Return the amount owed for this payment + apy (+ interests in case of late canceling)
         return
             (basePay + basePay * uint256(nftProps.apy)) * // installment + apy
             ((1 +
@@ -329,16 +344,81 @@ contract YAGMIController is AccessControl {
         yagmi.setURI(newuri);
     }
 
+    function payBack(
+        uint256 tokenId,
+        uint16 numberOfPayment
+    ) public onlyRole(CHAMPION) {
+        YAGMIProps memory nftProps = tokens[tokenId];
+        // Only champion of the tokenId can pay back
+        require(
+            nftProps.champion == msg.sender,
+            "Not the champion of the tokenId"
+        );
+
+        // Can only pay in order
+        require(
+            nftProps.paymentsDone + 1 == numberOfPayment,
+            "Wrong order of payments"
+        );
+
+        uint256 amountToPay = amountOwed(
+            tokenId,
+            numberOfPayment,
+            block.timestamp
+        );
+
+        // Calculate original base payment without changes
+        uint256 basePay = (nftProps.price * uint256(nftProps.maxSupply)) /
+            uint256(nftProps.numberOfPayments);
+        // Check if this payment finishes the debt
+        uint256 totalReturnedAfterPayment = basePay * numberOfPayment;
+        uint256 tokensLeft = yagmi.totalSupply(tokenId);
+        uint256 updatedLoanedAmount = tokensLeft * nftProps.price;
+
+        // If this cancels the debt, update state
+        if (totalReturnedAfterPayment >= updatedLoanedAmount) {
+            tokens[tokenId].status = YAGMIStatus.BURN_OPEN;
+        }
+
+        if (amountToPay == 0) return;
+
+        // Update state
+        tokens[tokenId].paymentsDone = numberOfPayment;
+        tokens[tokenId].returnedAmount += amountToPay;
+
+        // Verify we have enough allowance to receive the payment
+        uint256 currentAllowance = IERC20(nftProps.erc20).allowance(
+            msg.sender,
+            address(this)
+        );
+        if (currentAllowance < amountToPay)
+            require(
+                IERC20(nftProps.erc20).approve(address(this), amountToPay),
+                "Approve failed"
+            );
+
+        // Receive the amountToPay of erc20 tokens
+        require(
+            IERC20(nftProps.erc20).transferFrom(
+                msg.sender,
+                address(this),
+                amountToPay
+            ),
+            "ERC20 transfer failed"
+        );
+    }
+
     // DONE: setup initial tokenId properties (maxSupply, return %, etc)
     // DONE: mint function
     // DONE: ERC20 allowance before mint (Supporter approves ERC20 to spend)
     // DONE: setUri function
     // DONE: amountOwed function
     // DONE: withdrawLoan function
+    // DONE: payBack function
 
     // IN PROGRESS: changeTokenIdStatus (PROPOSED -> MINT_OPEN -> ... -> FINISHED)
     //    DONE:        EMPTY -> PROPOSED -> MINT_OPEN -> CANCELED
-    //    IN PROGRESS: EMPTY -> PROPOSED -> MINT_OPEN -> THRESHOLD_MET -> LOANED ->? BURN_OPEN ->? FINISHED
+    //    IN PROGRESS: EMPTY -> PROPOSED -> MINT_OPEN -> THRESHOLD_MET -> LOANED -> BURN_OPEN ->? FINISHED
 
     // TODO: Burn function to recover investment and its conditions
     // TODO: Chainlink trigger Functions
