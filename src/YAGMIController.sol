@@ -135,7 +135,7 @@ contract YAGMIController is AccessControl {
 
     event BurnOpen(uint256 indexed tokenId, uint256 indexed timestamp);
 
-    event PaymentReturned(
+    event ReturnedPayment(
         address indexed champion,
         uint256 indexed tokenId,
         uint16 indexed payment,
@@ -152,8 +152,8 @@ contract YAGMIController is AccessControl {
     event ClaimedDonations(
         address indexed champion,
         uint256 indexed tokenId,
-        claimedPay,
-        claimedInterests
+        uint256 claimedPay,
+        uint256 claimedInterests
     );
 
     /** Functions */
@@ -375,7 +375,7 @@ contract YAGMIController is AccessControl {
         uint16 payment,
         uint16 paymentsDone,
         uint16 numberOfPayments
-    ) internal pure returns (uint256) {
+    ) internal view returns (uint256) {
         // If number of payment out of range, return 0
         if (payment <= paymentsDone || payment > numberOfPayments) return 0;
 
@@ -552,7 +552,7 @@ contract YAGMIController is AccessControl {
         );
     }
 
-    function claimDonations(tokenId) public onlyRole(CHAMPION) {
+    function claimDonations(uint256 tokenId) public onlyRole(CHAMPION) {
         YAGMIProps memory nftProps = tokens[tokenId];
 
         require(
