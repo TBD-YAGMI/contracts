@@ -53,7 +53,13 @@ struct YAGMIProps {
     uint256 loanTaken; // Timestamp of moment the champion withdrew the loan
     // 256 bits -> 1 register
 
-    uint256 returnedAmount; // Timestamp of moment the champion withdrew the loan
+    uint256 interestsAccrued; // Amount of ERC20 payed as interest by champion
+    // 256 bits -> 1 register
+
+    uint256 amountReturned; // Amount of ERC20 returned from base payments by champion
+    // 256 bits -> 1 register
+
+    uint256 amountClaimed; // Amount of ERC20 claimed from base payments
     // 256 bits -> 1 register
 
     address sponsor; // Address of the DAO / sponsor for the champion
@@ -67,6 +73,8 @@ struct YAGMIProps {
     YAGMIStatus status; // Status of tokens
     // 232 bits -> 1 register
 }
+
+uint256 constant PRECISION = 10_000_000;
 
 contract YAGMIController is AccessControl {
     /** Constants */
@@ -116,6 +124,36 @@ contract YAGMIController is AccessControl {
     event NewInterestProportion(
         uint16 indexed oldInterestProportion,
         uint16 indexed newInterestProportion
+    );
+
+    event LoanWithdrawn(
+        address indexed champion,
+        uint256 indexed tokenId,
+        uint256 indexed timestamp,
+        uint256 amount
+    );
+
+    event BurnOpen(uint256 indexed tokenId, uint256 indexed timestamp);
+
+    event PaymentReturned(
+        address indexed champion,
+        uint256 indexed tokenId,
+        uint16 indexed payment,
+        uint256 pay,
+        uint256 interests
+    );
+    event ClaimedByBurn(
+        address indexed investor,
+        uint256 indexed tokenId,
+        uint256 tokenAmount,
+        uint256 pay,
+        uint256 interests
+    );
+    event ClaimedDonations(
+        address indexed champion,
+        uint256 indexed tokenId,
+        claimedPay,
+        claimedInterests
     );
 
     /** Functions */
@@ -278,7 +316,10 @@ contract YAGMIController is AccessControl {
             nftProps.champion == msg.sender,
             "Not the champion of the tokenId"
         );
-        require(nftProps.status == YAGMIStatus.THRESHOLD_MET);
+        require(
+            nftProps.status == YAGMIStatus.THRESHOLD_MET,
+            "Not in Threshold met status"
+        );
 
         tokens[tokenId].status = YAGMIStatus.LOANED;
         tokens[tokenId].loanTaken = block.timestamp;
@@ -291,63 +332,104 @@ contract YAGMIController is AccessControl {
             IERC20(nftProps.erc20).transfer(msg.sender, loanAmount),
             "ERC20 transfer failed"
         );
+
+        emit LoanWithdrawn(msg.sender, block.timestamp, tokenId, loanAmount);
     }
 
-    // How much is due for a given number of payment
-    function amountOwed(
+    // How much is owed for a given number of payment (returns pay + interests separately)
+    function amountsOwed(
         uint256 tokenId,
-        uint16 payment,
-        uint256 timestamp
-    ) public view returns (uint256) {
+        uint256 timestamp,
+        uint16 payment
+    ) public view returns (uint256 pay, uint256 interests) {
         YAGMIProps memory nftProps = tokens[tokenId];
 
+        uint256 baseOwed = _baseOwed(
+            tokenId,
+            nftProps.price,
+            nftProps.maxSupply,
+            payment,
+            nftProps.paymentsDone,
+            nftProps.numberOfPayments
+        );
+
+        if (baseOwed == 0) return (0, 0);
+
+        pay = baseOwed + (baseOwed * nftProps.apy) / PRECISION;
+
+        interests = _interestOwed(
+            pay,
+            timestamp,
+            nftProps.loanTaken,
+            uint256(nftProps.apy) * uint256(nftProps.interestProportion / 1000),
+            payment,
+            nftProps.daysToFirstPayment,
+            nftProps.paymentFreqInDays
+        );
+    }
+
+    function _baseOwed(
+        uint256 tokenId,
+        uint256 price,
+        uint32 maxSupply,
+        uint16 payment,
+        uint16 paymentsDone,
+        uint16 numberOfPayments
+    ) internal pure returns (uint256) {
         // If number of payment out of range, return 0
-        if (
-            payment <= nftProps.paymentsDone ||
-            payment > nftProps.numberOfPayments
-        ) return 0;
+        if (payment <= paymentsDone || payment > numberOfPayments) return 0;
 
-        // Calculate original base payment without changes
-        uint256 basePay = (nftProps.price * uint256(nftProps.maxSupply)) /
-            uint256(nftProps.numberOfPayments);
+        // Calculate original base payment
+        uint256 basePay = (price * maxSupply) / numberOfPayments;
 
-        // Check if there has been changes in the supply of the tokens that change the debt
-        uint256 totalAmountReturned = basePay * nftProps.paymentsDone;
+        uint256 totalBaseReturned = basePay * paymentsDone;
+
+        // Check if there has been changes in the supply of the tokens that lower the debt
         uint256 tokensLeft = yagmi.totalSupply(tokenId);
-        uint256 updatedLoanedAmount = tokensLeft * nftProps.price;
+        uint256 loanedBaseLeft = tokensLeft * price;
 
-        if (totalAmountReturned >= updatedLoanedAmount) return 0;
-        if (updatedLoanedAmount - totalAmountReturned < basePay)
-            basePay = updatedLoanedAmount - totalAmountReturned;
+        // If payed more or equal than is owed, return 0
+        if (totalBaseReturned >= loanedBaseLeft) return 0;
 
-        // Calculate days to payment and interest days
-        uint256 dueDate = nftProps.loanTaken +
-            uint256(nftProps.daysToFirstPayment) *
+        // If debt left is less than a base payment, return only debt
+        return
+            (loanedBaseLeft - totalBaseReturned < basePay)
+                ? loanedBaseLeft - totalBaseReturned
+                : basePay;
+    }
+
+    function _interestOwed(
+        uint256 basePay,
+        uint256 timestamp,
+        uint256 debtTakenDay,
+        uint256 dailyInterestPoints,
+        uint16 payment,
+        uint16 daysTo1stPayment,
+        uint16 paymentFreq
+    ) internal pure returns (uint256) {
+        // Due date for Payment
+        uint256 dueDate = debtTakenDay +
+            uint256(daysTo1stPayment) *
             1 days +
             (uint256(payment) - 1) *
-            uint256(nftProps.paymentFreqInDays) *
+            uint256(paymentFreq) *
             1 days;
 
-        uint256 interestDays;
-        if (timestamp > dueDate) interestDays = (timestamp - dueDate) / 1 days;
+        uint256 daysLate = (timestamp <= dueDate)
+            ? 0
+            : (timestamp - dueDate) / 1 days;
 
         // Return the amount owed for this payment + apy (+ interests in case of late canceling)
         return
-            (basePay + basePay * uint256(nftProps.apy)) * // installment + apy
-            ((1 +
-                ((uint256(nftProps.apy) *
-                    uint256(nftProps.interestProportion)) / 1000)) ** // interest
-                interestDays); // to the power of days late
+            (basePay * (dailyInterestPoints ** daysLate)) / // installment + apy
+            (PRECISION ** daysLate); // interest,  to the power of days late
     }
 
     function setURI(string memory newuri) public onlyRole(DEFAULT_ADMIN_ROLE) {
         yagmi.setURI(newuri);
     }
 
-    function payBack(
-        uint256 tokenId,
-        uint16 numberOfPayment
-    ) public onlyRole(CHAMPION) {
+    function returnPayment(uint256 tokenId) public onlyRole(CHAMPION) {
         YAGMIProps memory nftProps = tokens[tokenId];
         // Only champion of the tokenId can pay back
         require(
@@ -356,44 +438,48 @@ contract YAGMIController is AccessControl {
         );
 
         // Can only pay in order
-        require(
-            nftProps.paymentsDone + 1 == numberOfPayment,
-            "Wrong order of payments"
-        );
+        uint16 payment = nftProps.paymentsDone + 1;
 
-        uint256 amountToPay = amountOwed(
+        // Amount owed + interest owed
+        (uint256 pay, uint256 interests) = amountsOwed(
             tokenId,
-            numberOfPayment,
-            block.timestamp
+            block.timestamp,
+            payment
         );
 
         // Calculate original base payment without changes
-        uint256 basePay = (nftProps.price * uint256(nftProps.maxSupply)) /
-            uint256(nftProps.numberOfPayments);
+        uint256 basePay = (nftProps.price * nftProps.maxSupply) /
+            nftProps.numberOfPayments;
+
         // Check if this payment finishes the debt
-        uint256 totalReturnedAfterPayment = basePay * numberOfPayment;
+        uint256 totalReturnedAfterPayment = basePay * payment;
         uint256 tokensLeft = yagmi.totalSupply(tokenId);
         uint256 updatedLoanedAmount = tokensLeft * nftProps.price;
 
         // If this cancels the debt, update state
         if (totalReturnedAfterPayment >= updatedLoanedAmount) {
+            // update state
             tokens[tokenId].status = YAGMIStatus.BURN_OPEN;
+            emit BurnOpen(tokenId, block.timestamp);
         }
 
-        if (amountToPay == 0) return;
+        if (pay == 0) return;
 
         // Update state
-        tokens[tokenId].paymentsDone = numberOfPayment;
-        tokens[tokenId].returnedAmount += amountToPay;
+        tokens[tokenId].paymentsDone = payment;
+        tokens[tokenId].amountReturned += pay;
+        tokens[tokenId].interestsAccrued += interests;
+
+        uint256 totalPayment = pay + interests;
 
         // Verify we have enough allowance to receive the payment
         uint256 currentAllowance = IERC20(nftProps.erc20).allowance(
             msg.sender,
             address(this)
         );
-        if (currentAllowance < amountToPay)
+        if (currentAllowance < totalPayment)
             require(
-                IERC20(nftProps.erc20).approve(address(this), amountToPay),
+                IERC20(nftProps.erc20).approve(address(this), totalPayment),
                 "Approve failed"
             );
 
@@ -402,25 +488,120 @@ contract YAGMIController is AccessControl {
             IERC20(nftProps.erc20).transferFrom(
                 msg.sender,
                 address(this),
-                amountToPay
+                totalPayment
             ),
             "ERC20 transfer failed"
         );
+
+        emit ReturnedPayment(msg.sender, tokenId, payment, pay, interests);
     }
 
+    function burnToClaim(uint256 tokenId) public {
+        YAGMIProps memory nftProps = tokens[tokenId];
+        require(
+            nftProps.status == YAGMIStatus.BURN_OPEN,
+            "Burn to withdraw not open"
+        );
+
+        uint256 balance = yagmi.balanceOf(msg.sender, tokenId);
+        require(balance > 0, "Balance is 0. No tokens to burn");
+
+        uint256 totalSupply = yagmi.totalSupply(tokenId);
+        // totalSupply can't be 0 because balance > 0
+
+        uint256 basePrice = nftProps.price +
+            (nftProps.price * nftProps.apy) /
+            PRECISION;
+
+        uint256 baseClaim = basePrice * balance;
+
+        uint256 interestsClaim = balance == totalSupply
+            ? nftProps.interestsAccrued
+            : (nftProps.interestsAccrued * balance) / totalSupply;
+
+        require(
+            nftProps.amountReturned >= nftProps.amountClaimed + baseClaim,
+            "Not enough balance to claim"
+        );
+        // update state
+        tokens[tokenId].interestsAccrued -= interestsClaim;
+        tokens[tokenId].amountClaimed += baseClaim;
+
+        if (balance == totalSupply)
+            tokens[tokenId].status = YAGMIStatus.FINISHED;
+
+        // burn tokens
+        yagmi.burnOnlyOwner(msg.sender, tokenId, balance);
+
+        // transfer erc20
+        // Tranfer (balance * unitPrice) of erc20 tokens to champion
+        require(
+            IERC20(nftProps.erc20).transfer(
+                msg.sender,
+                baseClaim + interestsClaim
+            ),
+            "ERC20 transfer failed"
+        );
+
+        emit ClaimedByBurn(
+            msg.sender,
+            tokenId,
+            balance,
+            baseClaim,
+            interestsClaim
+        );
+    }
+
+    function claimDonations(tokenId) public onlyRole(CHAMPION) {
+        YAGMIProps memory nftProps = tokens[tokenId];
+
+        require(
+            nftProps.champion == msg.sender,
+            "Not the champion of the tokenId"
+        );
+
+        require(
+            nftProps.status == YAGMIStatus.FINISHED,
+            "Not in Finished status"
+        );
+
+        uint256 interestsDust = nftProps.interestsAccrued;
+        uint256 baseDust = nftProps.amountReturned - nftProps.amountClaimed;
+
+        require(baseDust + interestsDust > 0, "No Amount Left to Claim");
+
+        // update state
+        tokens[tokenId].interestsAccrued = 0;
+        tokens[tokenId].amountClaimed = nftProps.amountReturned;
+
+        // transfer erc20
+        // Tranfer (balance * unitPrice) of erc20 tokens to champion
+        require(
+            IERC20(nftProps.erc20).transfer(
+                msg.sender,
+                baseDust + interestsDust
+            ),
+            "ERC20 transfer failed"
+        );
+
+        emit ClaimedDonations(msg.sender, tokenId, baseDust, interestsDust);
+    }
+    // ---
     // DONE: setup initial tokenId properties (maxSupply, return %, etc)
     // DONE: mint function
     // DONE: ERC20 allowance before mint (Supporter approves ERC20 to spend)
     // DONE: setUri function
-    // DONE: amountOwed function
+    // DONE: amountsOwed function
     // DONE: withdrawLoan function
     // DONE: payBack function
+    // DONE: Burn function to recover investment and its conditions
+    // DONE: Claim donations by champion
 
-    // IN PROGRESS: changeTokenIdStatus (PROPOSED -> MINT_OPEN -> ... -> FINISHED)
+    // DONE: changeTokenIdStatus (PROPOSED -> MINT_OPEN -> ... -> FINISHED)
     //    DONE:        EMPTY -> PROPOSED -> MINT_OPEN -> CANCELED
-    //    IN PROGRESS: EMPTY -> PROPOSED -> MINT_OPEN -> THRESHOLD_MET -> LOANED -> BURN_OPEN ->? FINISHED
+    //    DONE: EMPTY -> PROPOSED -> MINT_OPEN -> THRESHOLD_MET -> LOANED -> BURN_OPEN -> FINISHED
 
-    // TODO: Burn function to recover investment and its conditions
+    // TODO: Move requires to custom errors
     // TODO: Chainlink trigger Functions
     // TODO: Incentives of different apy for staking
 }
