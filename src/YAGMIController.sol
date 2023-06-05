@@ -16,28 +16,28 @@ enum YAGMIStatus {
     CANCELED
 }
 
-struct ProfileProps {
-    uint256 registerDate;
-    uint256 birthDate;
-    string name;
-    string description;
-    string avatar;
-    address wallet;
-}
+// struct ProfileProps {
+//     uint256 registerDate;
+//     uint256 birthDate;
+//     string name;
+//     string description;
+//     string avatar;
+//     address wallet;
+// }
 
 struct SponsorProps {
-    uint64 proposed;
-    uint32 sponsored;
-    uint16 sponsoring;
+    // uint64 proposed;
+    // uint32 sponsored;
+    // uint16 sponsoring;
     uint8 ratio; // Under collateralized ratio of sponsor to champion grant
 }
 
-struct ChampionProps {
-    uint16 proposed;
-    uint16 sponsored;
-    uint16 payedBack;
-    uint16 canceled;
-}
+// struct ChampionProps {
+//     uint16 proposed;
+//     uint16 sponsored;
+//     uint16 payedBack;
+//     uint16 canceled;
+// }
 
 struct YAGMIProps {
     address champion; // Address of the champion
@@ -92,9 +92,9 @@ contract YAGMIController is AccessControl {
     // Properties for each NFT TokenId
     mapping(uint256 => YAGMIProps) public tokens;
     // Profile for each user
-    mapping(address => ProfileProps) public profiles;
+    // mapping(address => ProfileProps) public profiles;
     // Properties for each champion
-    mapping(address => ChampionProps) public champions;
+    // mapping(address => ChampionProps) public champions;
     // Properties for each sponsor
     mapping(address => SponsorProps) public sponsors;
     // Balance available of each ERC20, for each sponsor (ERC20 => sponsor => balance)
@@ -155,6 +155,12 @@ contract YAGMIController is AccessControl {
         uint256 claimedPay,
         uint256 claimedInterests
     );
+    event NewSponsor(address indexed sponsor, uint8 indexed ratio);
+    event ClaimedDeposit(
+        address indexed sponsor,
+        uint256 indexed tokenId,
+        uint256 depositAmount
+    );
 
     /** Functions */
     constructor(address adminWallet) {
@@ -171,6 +177,17 @@ contract YAGMIController is AccessControl {
         emit NewInterestProportion(interestProportion, newInterestProportion);
     }
 
+    function addSponsor(
+        address sponsor,
+        uint8 ratio
+    ) public onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(sponsor != address(0), "0x00 cannot be a sponsor");
+        require(ratio > 0, "Ratio cannot be 0");
+        sponsors[sponsor].ratio = ratio;
+        grantRole(SPONSOR, sponsor);
+        emit NewSponsor(sponsor, ratio);
+    }
+
     function proposeChampion(
         address champion,
         uint32 maxSupply,
@@ -181,6 +198,7 @@ contract YAGMIController is AccessControl {
         address erc20,
         uint16 daysToFirstPayment
     ) public onlyRole(SPONSOR) returns (uint256 tokenId) {
+        require(champion != address(0), "0x00 cannot be a champion");
         SponsorProps memory sponsor = sponsors[msg.sender];
         uint256 depositAmount = (price * maxSupply) / sponsor.ratio;
 
@@ -496,6 +514,30 @@ contract YAGMIController is AccessControl {
         emit ReturnedPayment(msg.sender, tokenId, payment, pay, interests);
     }
 
+    function claimDeposit(uint256 tokenId) public onlyRole(SPONSOR) {
+        YAGMIProps memory nftProps = tokens[tokenId];
+        // Only sponsor of the tokenId can pay back
+        require(
+            nftProps.sponsor == msg.sender,
+            "Not the sponsor of the tokenId"
+        );
+        // Only after burn is open can the deposit be claimed
+        require(
+            nftProps.status == YAGMIStatus.BURN_OPEN,
+            "Burn to withdraw not open"
+        );
+        uint256 depositAmount = (nftProps.price * nftProps.maxSupply) /
+            nftProps.ratio;
+
+        // transfer erc20
+        require(
+            IERC20(nftProps.erc20).transfer(msg.sender, depositAmount),
+            "ERC20 transfer failed"
+        );
+
+        emit ClaimedDeposit(msg.sender, tokenId, depositAmount);
+    }
+
     function burnToClaim(uint256 tokenId) public {
         YAGMIProps memory nftProps = tokens[tokenId];
         require(
@@ -596,10 +638,13 @@ contract YAGMIController is AccessControl {
     // DONE: payBack function
     // DONE: Burn function to recover investment and its conditions
     // DONE: Claim donations by champion
+    // DONE: claimDeposit
 
     // DONE: changeTokenIdStatus (PROPOSED -> MINT_OPEN -> ... -> FINISHED)
     //    DONE:        EMPTY -> PROPOSED -> MINT_OPEN -> CANCELED
     //    DONE: EMPTY -> PROPOSED -> MINT_OPEN -> THRESHOLD_MET -> LOANED -> BURN_OPEN -> FINISHED
+
+    // TODO: threshold not met (chainlink automation)
 
     // TODO: Move requires to custom errors
     // TODO: Chainlink trigger Functions
