@@ -10,44 +10,29 @@ enum YAGMIStatus {
     PROPOSED,
     MINT_OPEN,
     THRESHOLD_MET,
+    THRESHOLD_UNMET,
     LOANED,
     BURN_OPEN, // Also means Sponsor Deposit is Claimable
     FINISHED,
     CANCELED
 }
 
-// struct ProfileProps {
-//     uint256 registerDate;
-//     uint256 birthDate;
-//     string name;
-//     string description;
-//     string avatar;
-//     address wallet;
-// }
-
 struct SponsorProps {
-    // uint64 proposed;
-    // uint32 sponsored;
-    // uint16 sponsoring;
     uint8 ratio; // Under collateralized ratio of sponsor to champion grant
 }
-
-// struct ChampionProps {
-//     uint16 proposed;
-//     uint16 sponsored;
-//     uint16 payedBack;
-//     uint16 canceled;
-// }
 
 struct YAGMIProps {
     address champion; // Address of the champion
     uint32 maxSupply; // Max amount of tokens to mint
     uint32 apy; // % apy, 6 digits of precision (4000000 = 4.000000 %)
-    uint16 daysToFirstPayment; // Days for first payment of champion starting from the date the loan was withdrawn
-    uint16 paymentFreqInDays; // Payments frequency for the champion
+    uint16 interestProportion; // in 1/1000 of apy, to apply daily interest for late payments
+    uint16 ratio; // Ratio used when proposing the champion
     // 256 bits -> 1 register
 
     uint256 price; // Price of each token in wei
+    // 256 bits -> 1 register
+
+    uint256 mintStart; // Timestamp of moment the champion withdrew the loan
     // 256 bits -> 1 register
 
     uint256 loanTaken; // Timestamp of moment the champion withdrew the loan
@@ -66,12 +51,13 @@ struct YAGMIProps {
     // 160 bits -> 1 register
 
     address erc20; // ERC20 to use for token payments/returns
-    uint16 interestProportion; // in 1/1000 of apy, to apply daily interest for late payments
+    uint16 maxMintDays; // Max days mint can be open to achieve threshold
+    uint16 daysToFirstPayment; // Days for first payment of champion starting from the date the loan was withdrawn
+    uint16 paymentFreqInDays; // Payments frequency for the champion
     uint16 numberOfPayments; // Number of payments the champion is going to do to return the loan
     uint16 paymentsDone; // Number of payments the champion already payed back
-    uint16 ratio; // Ratio used when proposing the champion
     YAGMIStatus status; // Status of tokens
-    // 232 bits -> 1 register
+    // 248 bits -> 1 register
 }
 
 uint256 constant PRECISION = 10_000_000;
@@ -149,6 +135,12 @@ contract YAGMIController is AccessControl {
         uint256 pay,
         uint256 interests
     );
+    event RecoveredByBurn(
+        address indexed investor,
+        uint256 indexed tokenId,
+        uint256 tokenAmount,
+        uint256 pay
+    );
     event ClaimedDonations(
         address indexed champion,
         uint256 indexed tokenId,
@@ -196,7 +188,8 @@ contract YAGMIController is AccessControl {
         uint16 numberOfPayments,
         uint256 price,
         address erc20,
-        uint16 daysToFirstPayment
+        uint16 daysToFirstPayment,
+        uint16 maxMintDays
     ) public onlyRole(SPONSOR) returns (uint256 tokenId) {
         require(champion != address(0), "0x00 cannot be a champion");
         SponsorProps memory sponsor = sponsors[msg.sender];
@@ -210,6 +203,7 @@ contract YAGMIController is AccessControl {
         tokens[currentId].sponsor = msg.sender;
         tokens[currentId].apy = apy;
         tokens[currentId].interestProportion = interestProportion;
+        tokens[currentId].maxMintDays = maxMintDays;
         tokens[currentId].daysToFirstPayment = daysToFirstPayment;
         tokens[currentId].paymentFreqInDays = paymentFreqInDays;
         tokens[currentId].numberOfPayments = numberOfPayments;
@@ -260,6 +254,9 @@ contract YAGMIController is AccessControl {
         // Open mint for token
         tokens[tokenId].status = YAGMIStatus.MINT_OPEN;
 
+        // Set the moment the mint started
+        tokens[tokenId].mintStart = block.timestamp;
+
         // Emit events
         emit MintOpen(tokenId);
     }
@@ -289,6 +286,11 @@ contract YAGMIController is AccessControl {
         YAGMIProps memory nftProps = tokens[id];
 
         require(nftProps.status == YAGMIStatus.MINT_OPEN, "Minting Not Open");
+        require(
+            nftProps.mintStart + nftProps.maxMintDays * 1 days >
+                block.timestamp,
+            "Mint window has finished"
+        );
         uint256 currentSupply = yagmi.totalSupply(id);
         require(
             nftProps.maxSupply >= currentSupply + amount,
@@ -523,8 +525,9 @@ contract YAGMIController is AccessControl {
         );
         // Only after burn is open can the deposit be claimed
         require(
-            nftProps.status == YAGMIStatus.BURN_OPEN,
-            "Burn to withdraw not open"
+            nftProps.status == YAGMIStatus.BURN_OPEN ||
+                nftProps.status == YAGMIStatus.THRESHOLD_UNMET,
+            "No BurnOpen/TresholdUnmet status"
         );
         uint256 depositAmount = (nftProps.price * nftProps.maxSupply) /
             nftProps.ratio;
@@ -594,6 +597,42 @@ contract YAGMIController is AccessControl {
         );
     }
 
+    function burnToRecover(uint256 tokenId) public {
+        YAGMIProps memory nftProps = tokens[tokenId];
+        require(
+            nftProps.status == YAGMIStatus.THRESHOLD_UNMET,
+            "Not in ThresholdUnmet status"
+        );
+
+        uint256 balance = yagmi.balanceOf(msg.sender, tokenId);
+        require(balance > 0, "Balance is 0. No tokens to burn");
+
+        uint256 totalSupply = yagmi.totalSupply(tokenId);
+        // totalSupply can't be 0 because balance > 0
+
+        uint256 basePrice = nftProps.price;
+
+        uint256 baseClaim = basePrice * balance;
+
+        // update state
+        tokens[tokenId].amountClaimed += baseClaim;
+
+        if (balance == totalSupply)
+            tokens[tokenId].status = YAGMIStatus.FINISHED;
+
+        // burn tokens
+        yagmi.burnOnlyOwner(msg.sender, tokenId, balance);
+
+        // transfer erc20
+        // Tranfer (balance * unitPrice) of erc20 tokens to champion
+        require(
+            IERC20(nftProps.erc20).transfer(msg.sender, baseClaim),
+            "ERC20 transfer failed"
+        );
+
+        emit RecoveredByBurn(msg.sender, tokenId, balance, baseClaim);
+    }
+
     function claimDonations(uint256 tokenId) public onlyRole(CHAMPION) {
         YAGMIProps memory nftProps = tokens[tokenId];
 
@@ -636,15 +675,17 @@ contract YAGMIController is AccessControl {
     // DONE: amountsOwed function
     // DONE: withdrawLoan function
     // DONE: payBack function
-    // DONE: Burn function to recover investment and its conditions
+    // DONE: Burn function to recover investment when threshold not met
+    // DONE: Burn function to recover investment when champion has payed back
     // DONE: Claim donations by champion
     // DONE: claimDeposit
 
     // DONE: changeTokenIdStatus (PROPOSED -> MINT_OPEN -> ... -> FINISHED)
-    //    DONE:        EMPTY -> PROPOSED -> MINT_OPEN -> CANCELED
+    //    DONE: EMPTY -> PROPOSED -> MINT_OPEN -> CANCELED
+    //    DONE: EMPTY -> PROPOSED -> MINT_OPEN -> THRESHOLD_UNMET -> FINISHED
     //    DONE: EMPTY -> PROPOSED -> MINT_OPEN -> THRESHOLD_MET -> LOANED -> BURN_OPEN -> FINISHED
 
-    // TODO: threshold not met (chainlink automation)
+    // IN PROGRESS: threshold not met (chainlink automation)
 
     // TODO: Move requires to custom errors
     // TODO: Chainlink trigger Functions
