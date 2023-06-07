@@ -76,9 +76,9 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
     // Properties for each NFT TokenId
     mapping(uint256 => YAGMIProps) public tokens;
     // From uint256 (day of mint end) to uint256[] (tokenIds) list (to mark as threshold unmet) */
-    mapping(uint256 => uitn256[]) public unmetThreshold;
+    mapping(uint256 => uint256[]) public unmetThreshold;
     // Properties for each sponsor
-    mapping(address => uint8) public sponsorsRatio;
+    mapping(address => uint16) public sponsorsRatio;
     // Balance available of each ERC20, for each sponsor (ERC20 => sponsor => balance)
     mapping(address => mapping(address => uint256))
         public sponsorAvailableBalance;
@@ -143,7 +143,7 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
         uint256 claimedPay,
         uint256 claimedInterests
     );
-    event NewSponsor(address indexed sponsor, uint8 indexed ratio);
+    event NewSponsor(address indexed sponsor, uint16 indexed ratio);
     event ClaimedDeposit(
         address indexed sponsor,
         uint256 indexed tokenId,
@@ -167,7 +167,7 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
 
     function addSponsor(
         address sponsor,
-        uint8 ratio
+        uint16 ratio
     ) public onlyRole(DEFAULT_ADMIN_ROLE) {
         require(sponsor != address(0), "0x00 cannot be a sponsor");
         require(ratio > 0, "Ratio cannot be 0");
@@ -188,7 +188,7 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
         uint16 maxMintDays
     ) public onlyRole(SPONSOR) returns (uint256 tokenId) {
         require(champion != address(0), "0x00 cannot be a champion");
-        uint256 sponsorRatio = sponsorsRatio[msg.sender];
+        uint16 sponsorRatio = sponsorsRatio[msg.sender];
         uint256 depositAmount = (price * maxSupply) / sponsorRatio;
 
         // Set Props for the NFT of the champion
@@ -255,10 +255,10 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
         // Set the moment the mint started
         tokens[tokenId].mintStart = mintStart;
 
-        uint256 unmetThreshold = mintStart / TIMEFRAME + nftProps.maxMintDays;
+        uint256 threshold = mintStart / TIMEFRAME + nftProps.maxMintDays;
 
         // Add tokenId to day of unmet threshold
-        unmetThreshold[unmetThreshold].append(tokenId);
+        unmetThreshold[threshold].push(tokenId);
 
         // Emit events
         emit MintOpen(tokenId);
@@ -305,11 +305,11 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
         // Update status if Threshold is met
         if (nftProps.maxSupply == currentSupply + amount) {
             tokens[id].status = YAGMIStatus.THRESHOLD_MET;
-            // remove from threshold unmet list
-            removeFromUnmetThreshold(
-                nftProps.mintStart / TIMEFRAME + nftProps.maxMintDays,
-                tokenId
-            );
+            // remove from threshold unmet list (we don't need this, it checks the status)
+            // removeFromUnmetThreshold(
+            //     nftProps.mintStart / TIMEFRAME + nftProps.maxMintDays,
+            //     tokenId
+            // );
             // emit events
             emit ThresholdMet(id);
         }
@@ -678,13 +678,18 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
 
     // Chainlink Automation:
     function checkUpkeep(
-        bytes calldata checkData
-    ) external returns (bool upkeepNeeded, bytes memory performData) {
+        bytes calldata /* checkData */
+    )
+        external
+        view
+        override
+        returns (bool upkeepNeeded, bytes memory performData)
+    {
         upkeepNeeded = unmetThreshold[block.timestamp / TIMEFRAME].length > 0;
         performData = "";
     }
 
-    function performUpkeep(bytes calldata performData) external {
+    function performUpkeep(bytes calldata /* performData */) external override {
         uint256 today = block.timestamp / TIMEFRAME;
         uint256 len = unmetThreshold[today].length;
         YAGMIProps memory nftProps;
