@@ -3,6 +3,7 @@ pragma solidity ^0.8.9;
 
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@chainlink/contracts/automation/AutomationCompatible.sol";
 import "./YAGMI.sol";
 
 enum YAGMIStatus {
@@ -15,10 +16,6 @@ enum YAGMIStatus {
     BURN_OPEN, // Also means Sponsor Deposit is Claimable
     FINISHED,
     CANCELED
-}
-
-struct SponsorProps {
-    uint8 ratio; // Under collateralized ratio of sponsor to champion grant
 }
 
 struct YAGMIProps {
@@ -62,7 +59,7 @@ struct YAGMIProps {
 
 uint256 constant PRECISION = 10_000_000;
 
-contract YAGMIController is AccessControl {
+contract YAGMIController is AccessControl, AutomationCompatibleInterface {
     /** Constants */
     bytes32 public constant SPONSOR = keccak256("SPONSOR_ROLE");
     bytes32 public constant CHAMPION = keccak256("CHAMPION_ROLE");
@@ -77,12 +74,10 @@ contract YAGMIController is AccessControl {
     YAGMI public yagmi;
     // Properties for each NFT TokenId
     mapping(uint256 => YAGMIProps) public tokens;
-    // Profile for each user
-    // mapping(address => ProfileProps) public profiles;
-    // Properties for each champion
-    // mapping(address => ChampionProps) public champions;
+    // From uint256 (day of mint end) to uint256[] (tokenIds) list (to mark as threshold unmet) */
+    mapping(uint256 => uitn256[]) public unmetThreshold;
     // Properties for each sponsor
-    mapping(address => SponsorProps) public sponsors;
+    mapping(address => uint8) public sponsorsRatio;
     // Balance available of each ERC20, for each sponsor (ERC20 => sponsor => balance)
     mapping(address => mapping(address => uint256))
         public sponsorAvailableBalance;
@@ -175,7 +170,7 @@ contract YAGMIController is AccessControl {
     ) public onlyRole(DEFAULT_ADMIN_ROLE) {
         require(sponsor != address(0), "0x00 cannot be a sponsor");
         require(ratio > 0, "Ratio cannot be 0");
-        sponsors[sponsor].ratio = ratio;
+        sponsorsRatio[sponsor] = ratio;
         grantRole(SPONSOR, sponsor);
         emit NewSponsor(sponsor, ratio);
     }
@@ -192,8 +187,8 @@ contract YAGMIController is AccessControl {
         uint16 maxMintDays
     ) public onlyRole(SPONSOR) returns (uint256 tokenId) {
         require(champion != address(0), "0x00 cannot be a champion");
-        SponsorProps memory sponsor = sponsors[msg.sender];
-        uint256 depositAmount = (price * maxSupply) / sponsor.ratio;
+        uint256 sponsorRatio = sponsorsRatio[msg.sender];
+        uint256 depositAmount = (price * maxSupply) / sponsorRatio;
 
         // Set Props for the NFT of the champion
         tokenId = currentId;
@@ -207,7 +202,7 @@ contract YAGMIController is AccessControl {
         tokens[currentId].daysToFirstPayment = daysToFirstPayment;
         tokens[currentId].paymentFreqInDays = paymentFreqInDays;
         tokens[currentId].numberOfPayments = numberOfPayments;
-        tokens[currentId].ratio = sponsors[msg.sender].ratio;
+        tokens[currentId].ratio = sponsorRatio;
         tokens[currentId].erc20 = erc20;
         tokens[currentId].status = YAGMIStatus.PROPOSED;
 
@@ -254,8 +249,15 @@ contract YAGMIController is AccessControl {
         // Open mint for token
         tokens[tokenId].status = YAGMIStatus.MINT_OPEN;
 
+        uint256 mintStart = block.timestamp;
+
         // Set the moment the mint started
-        tokens[tokenId].mintStart = block.timestamp;
+        tokens[tokenId].mintStart = mintStart;
+
+        uint256 unmetThreshold = mintStart / 1 days + nftProps.maxMintDays;
+
+        // Add tokenId to day of unmet threshold
+        unmetThreshold[unmetThreshold].append(tokenId);
 
         // Emit events
         emit MintOpen(tokenId);
@@ -302,6 +304,11 @@ contract YAGMIController is AccessControl {
         // Update status if Threshold is met
         if (nftProps.maxSupply == currentSupply + amount) {
             tokens[id].status = YAGMIStatus.THRESHOLD_MET;
+            // remove from threshold unmet list
+            removeFromUnmetThreshold(
+                nftProps.mintStart / 1 days + nftProps.maxMintDays,
+                tokenId
+            );
             // emit events
             emit ThresholdMet(id);
         }
@@ -667,6 +674,14 @@ contract YAGMIController is AccessControl {
 
         emit ClaimedDonations(msg.sender, tokenId, baseDust, interestsDust);
     }
+
+    // Chainlink Automation:
+    function checkUpkeep(
+        bytes calldata checkData
+    ) external returns (bool upkeepNeeded, bytes memory performData) {}
+
+    function performUpkeep(bytes calldata performData) external {}
+
     // ---
     // DONE: setup initial tokenId properties (maxSupply, return %, etc)
     // DONE: mint function
