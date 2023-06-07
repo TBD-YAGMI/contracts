@@ -678,9 +678,24 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
     // Chainlink Automation:
     function checkUpkeep(
         bytes calldata checkData
-    ) external returns (bool upkeepNeeded, bytes memory performData) {}
+    ) external returns (bool upkeepNeeded, bytes memory performData) {
+        upkeepNeeded = unmetThreshold[block.timestamp / 1 days].length > 0;
+        performData = "";
+    }
 
-    function performUpkeep(bytes calldata performData) external {}
+    function performUpkeep(bytes calldata performData) external {
+        uint256 today = block.timestamp / 1 days;
+        uint256 len = unmetThreshold[today].length;
+        YAGMIProps memory nftProps;
+        for (uint256 i = 0; i < len - 1; i++) {
+            uint256 tokenId = unmetThreshold[today][i];
+            nftProps = tokens[tokenId];
+            // If we are at threshold date and mint is still open, change status
+            if (nftProps.status == YAGMIStatus.MINT_OPEN)
+                tokens[tokenId].status = YAGMIStatus.THRESHOLD_UNMET;
+        }
+        delete unmetThreshold[today];
+    }
 
     // ---
     // DONE: setup initial tokenId properties (maxSupply, return %, etc)
@@ -694,6 +709,7 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
     // DONE: Burn function to recover investment when champion has payed back
     // DONE: Claim donations by champion
     // DONE: claimDeposit
+    // DONE: Chainlink trigger Functions
 
     // DONE: changeTokenIdStatus (PROPOSED -> MINT_OPEN -> ... -> FINISHED)
     //    DONE: EMPTY -> PROPOSED -> MINT_OPEN -> CANCELED
@@ -702,7 +718,7 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
 
     // IN PROGRESS: threshold not met (chainlink automation)
 
+    // TODO: change 1 days to a constant
     // TODO: Move requires to custom errors
-    // TODO: Chainlink trigger Functions
     // TODO: Incentives of different apy for staking
 }
