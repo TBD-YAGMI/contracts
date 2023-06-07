@@ -58,6 +58,7 @@ struct YAGMIProps {
 }
 
 uint256 constant PRECISION = 10_000_000;
+uint256 constant TIMEFRAME = 1 days;
 
 contract YAGMIController is AccessControl, AutomationCompatibleInterface {
     /** Constants */
@@ -254,7 +255,7 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
         // Set the moment the mint started
         tokens[tokenId].mintStart = mintStart;
 
-        uint256 unmetThreshold = mintStart / 1 days + nftProps.maxMintDays;
+        uint256 unmetThreshold = mintStart / TIMEFRAME + nftProps.maxMintDays;
 
         // Add tokenId to day of unmet threshold
         unmetThreshold[unmetThreshold].append(tokenId);
@@ -289,7 +290,7 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
 
         require(nftProps.status == YAGMIStatus.MINT_OPEN, "Minting Not Open");
         require(
-            nftProps.mintStart + nftProps.maxMintDays * 1 days >
+            nftProps.mintStart + nftProps.maxMintDays * TIMEFRAME >
                 block.timestamp,
             "Mint window has finished"
         );
@@ -306,7 +307,7 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
             tokens[id].status = YAGMIStatus.THRESHOLD_MET;
             // remove from threshold unmet list
             removeFromUnmetThreshold(
-                nftProps.mintStart / 1 days + nftProps.maxMintDays,
+                nftProps.mintStart / TIMEFRAME + nftProps.maxMintDays,
                 tokenId
             );
             // emit events
@@ -437,14 +438,14 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
         // Due date for Payment
         uint256 dueDate = debtTakenDay +
             uint256(daysTo1stPayment) *
-            1 days +
+            TIMEFRAME +
             (uint256(payment) - 1) *
             uint256(paymentFreq) *
-            1 days;
+            TIMEFRAME;
 
         uint256 daysLate = (timestamp <= dueDate)
             ? 0
-            : (timestamp - dueDate) / 1 days;
+            : (timestamp - dueDate) / TIMEFRAME;
 
         // Return the amount owed for this payment + apy (+ interests in case of late canceling)
         return
@@ -679,12 +680,12 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
     function checkUpkeep(
         bytes calldata checkData
     ) external returns (bool upkeepNeeded, bytes memory performData) {
-        upkeepNeeded = unmetThreshold[block.timestamp / 1 days].length > 0;
+        upkeepNeeded = unmetThreshold[block.timestamp / TIMEFRAME].length > 0;
         performData = "";
     }
 
     function performUpkeep(bytes calldata performData) external {
-        uint256 today = block.timestamp / 1 days;
+        uint256 today = block.timestamp / TIMEFRAME;
         uint256 len = unmetThreshold[today].length;
         YAGMIProps memory nftProps;
         for (uint256 i = 0; i < len - 1; i++) {
@@ -710,6 +711,7 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
     // DONE: Claim donations by champion
     // DONE: claimDeposit
     // DONE: Chainlink trigger Functions
+    // DONE: change 1 days to a constant
 
     // DONE: changeTokenIdStatus (PROPOSED -> MINT_OPEN -> ... -> FINISHED)
     //    DONE: EMPTY -> PROPOSED -> MINT_OPEN -> CANCELED
@@ -718,7 +720,6 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
 
     // IN PROGRESS: threshold not met (chainlink automation)
 
-    // TODO: change 1 days to a constant
     // TODO: Move requires to custom errors
     // TODO: Incentives of different apy for staking
 }
