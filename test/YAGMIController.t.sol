@@ -485,6 +485,54 @@ contract YAGMIControllerTest is Test {
         uint8 statusCode = uint8(YAGMIStatus.FINISHED);
         assertEq(status, statusCode);
     }
+
+    function printStatus(uint256 tokenId) internal view {
+        (, , , , , , , , , , , , , , , , , YAGMIStatus nftstatus, , ) = yc
+            .tokens(tokenId);
+        console.log("Time: ", block.timestamp);
+        console.log("Status: ", uint8(nftstatus));
+    }
+
+    function testUnmetThreshold() public {
+        addSponsor();
+        proposeChampion();
+        openMint();
+
+        vm.warp(block.timestamp + TIMEFRAME * 29);
+        yc.performUpkeep("");
+        printStatus(0);
+        vm.warp(block.timestamp + TIMEFRAME * 1);
+        yc.performUpkeep("");
+        printStatus(0);
+
+        (, , , , , , , , , , , , , , , , , YAGMIStatus nftstatus, , ) = yc
+            .tokens(0);
+
+        uint8 status = uint8(nftstatus);
+        uint8 statusCode = uint8(YAGMIStatus.THRESHOLD_UNMET);
+        assertEq(status, statusCode);
+    }
+
+    function burnToRecover(uint256 tokenId) internal {
+        vm.prank(investor);
+        yc.burnToRecover(tokenId);
+    }
+
+    function testBurnToRecover() public {
+        addSponsor();
+        proposeChampion();
+
+        openMint();
+        uint256 oldBalance = fUSDC.balanceOf(investor);
+        mint(0, 10);
+        vm.warp(block.timestamp + TIMEFRAME * 29);
+        yc.performUpkeep("");
+        vm.warp(block.timestamp + TIMEFRAME * 1);
+        yc.performUpkeep("");
+        burnToRecover(0);
+        uint256 newBalance = fUSDC.balanceOf(investor);
+        assertEq(oldBalance, newBalance);
+    }
 }
 
 // (

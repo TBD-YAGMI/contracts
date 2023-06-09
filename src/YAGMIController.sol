@@ -699,15 +699,17 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
     function performUpkeep(bytes calldata /* performData */) external override {
         uint256 today = block.timestamp / TIMEFRAME;
         uint256 len = unmetThreshold[today].length;
-        YAGMIProps memory nftProps;
-        for (uint256 i = 0; i < len - 1; i++) {
-            uint256 tokenId = unmetThreshold[today][i];
-            nftProps = tokens[tokenId];
-            // If we are at threshold date and mint is still open, change status
-            if (nftProps.status == YAGMIStatus.MINT_OPEN)
-                tokens[tokenId].status = YAGMIStatus.THRESHOLD_UNMET;
+        if (len > 0) {
+            YAGMIProps memory nftProps;
+            for (uint256 i = 0; i < len; i++) {
+                uint256 tokenId = unmetThreshold[today][i];
+                nftProps = tokens[tokenId];
+                // If we are at threshold date and mint is still open, change status
+                if (nftProps.status == YAGMIStatus.MINT_OPEN)
+                    tokens[tokenId].status = YAGMIStatus.THRESHOLD_UNMET;
+            }
+            delete unmetThreshold[today];
         }
-        delete unmetThreshold[today];
     }
 
     // ---
