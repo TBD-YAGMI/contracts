@@ -6,6 +6,8 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@chainlink/contracts/automation/AutomationCompatible.sol";
 import "./YAGMI.sol";
 
+// import "forge-std/console.sol";
+
 enum YAGMIStatus {
     EMPTY,
     PROPOSED,
@@ -25,28 +27,18 @@ struct YAGMIProps {
     uint16 interestProportion; // in 1/1000 of apy, to apply daily interest for late payments
     uint16 ratio; // Ratio used when proposing the champion
     // 256 bits -> 1 register
-
     uint256 price; // Price of each token in wei
     // 256 bits -> 1 register
-
     uint256 mintStart; // Timestamp of moment the champion withdrew the loan
     // 256 bits -> 1 register
-
     uint256 loanTaken; // Timestamp of moment the champion withdrew the loan
     // 256 bits -> 1 register
-
     uint256 interestsAccrued; // Amount of ERC20 payed as interest by champion
     // 256 bits -> 1 register
-
     uint256 amountReturned; // Amount of ERC20 returned from base payments by champion
     // 256 bits -> 1 register
-
     uint256 amountClaimed; // Amount of ERC20 claimed from base payments
     // 256 bits -> 1 register
-
-    address sponsor; // Address of the DAO / sponsor for the champion
-    // 160 bits -> 1 register
-
     address erc20; // ERC20 to use for token payments/returns
     uint16 maxMintDays; // Max days mint can be open to achieve threshold
     uint16 daysToFirstPayment; // Days for first payment of champion starting from the date the loan was withdrawn
@@ -54,10 +46,13 @@ struct YAGMIProps {
     uint16 numberOfPayments; // Number of payments the champion is going to do to return the loan
     uint16 paymentsDone; // Number of payments the champion already payed back
     YAGMIStatus status; // Status of tokens
-    // 248 bits -> 1 register
+    bool claimedDeposit; // Claimed deposit by sponsor
+    // 256 bits -> 1 register
+    address sponsor; // Address of the DAO / sponsor for the champion
+    // 160 bits -> 1 register
 }
 
-uint256 constant PRECISION = 10_000_000;
+uint256 constant PRECISION = 100_000_000;
 uint256 constant TIMEFRAME = 1 days;
 
 contract YAGMIController is AccessControl, AutomationCompatibleInterface {
@@ -165,10 +160,8 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
         emit NewInterestProportion(interestProportion, newInterestProportion);
     }
 
-    function addSponsor(
-        address sponsor,
-        uint16 ratio
-    ) public onlyRole(DEFAULT_ADMIN_ROLE) {
+    function addSponsor(address sponsor, uint16 ratio) public {
+        /* onlyRole(DEFAULT_ADMIN_ROLE) */
         require(sponsor != address(0), "0x00 cannot be a sponsor");
         require(ratio > 0, "Ratio cannot be 0");
         sponsorsRatio[sponsor] = ratio;
@@ -218,11 +211,10 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
             msg.sender,
             address(this)
         );
-        if (currentAllowance < depositAmount)
-            require(
-                IERC20(erc20).approve(address(this), depositAmount),
-                "Approve failed"
-            );
+        require(
+            currentAllowance >= depositAmount,
+            "Not enough erc20 allowance"
+        );
 
         // Receive the depositAmount of erc20 tokens
         require(
@@ -305,12 +297,6 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
         // Update status if Threshold is met
         if (nftProps.maxSupply == currentSupply + amount) {
             tokens[id].status = YAGMIStatus.THRESHOLD_MET;
-            // remove from threshold unmet list (we don't need this, it checks the status)
-            // removeFromUnmetThreshold(
-            //     nftProps.mintStart / TIMEFRAME + nftProps.maxMintDays,
-            //     tokenId
-            // );
-            // emit events
             emit ThresholdMet(id);
         }
 
@@ -320,11 +306,7 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
             msg.sender,
             address(this)
         );
-        if (currentAllowance < totalPrice)
-            require(
-                IERC20(nftProps.erc20).approve(address(this), totalPrice),
-                "Approve failed"
-            );
+        require(currentAllowance >= totalPrice, "Not enough erc20 allowance");
 
         // Receive the depositAmount of erc20 tokens
         require(
@@ -367,7 +349,7 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
     // How much is owed for a given number of payment (returns pay + interests separately)
     function amountsOwed(
         uint256 tokenId,
-        uint256 timestamp,
+        uint256 /* timestamp */,
         uint16 payment
     ) public view returns (uint256 pay, uint256 interests) {
         YAGMIProps memory nftProps = tokens[tokenId];
@@ -383,17 +365,23 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
 
         if (baseOwed == 0) return (0, 0);
 
-        pay = baseOwed + (baseOwed * nftProps.apy) / PRECISION;
+        pay = baseOwed + (baseOwed * uint256(nftProps.apy)) / PRECISION;
 
-        interests = _interestOwed(
-            pay,
-            timestamp,
-            nftProps.loanTaken,
-            uint256(nftProps.apy) * uint256(nftProps.interestProportion / 1000),
-            payment,
-            nftProps.daysToFirstPayment,
-            nftProps.paymentFreqInDays
-        );
+        // Override for MVP (no interests)
+        return (pay, interests);
+
+        // uint256 dailyInterest = (uint256(nftProps.apy) *
+        //     uint256(nftProps.interestProportion)) / 1000;
+
+        // interests = _interestOwed(
+        //     pay,
+        //     timestamp,
+        //     nftProps.loanTaken,
+        //     dailyInterest,
+        //     payment,
+        //     nftProps.daysToFirstPayment,
+        //     nftProps.paymentFreqInDays
+        // );
     }
 
     function _baseOwed(
@@ -426,32 +414,40 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
                 : basePay;
     }
 
-    function _interestOwed(
-        uint256 basePay,
-        uint256 timestamp,
-        uint256 debtTakenDay,
-        uint256 dailyInterestPoints,
-        uint16 payment,
-        uint16 daysTo1stPayment,
-        uint16 paymentFreq
-    ) internal pure returns (uint256) {
-        // Due date for Payment
-        uint256 dueDate = debtTakenDay +
-            uint256(daysTo1stPayment) *
-            TIMEFRAME +
-            (uint256(payment) - 1) *
-            uint256(paymentFreq) *
-            TIMEFRAME;
+    // function _interestOwed(
+    //     uint256 basePay,
+    //     uint256 timestamp,
+    //     uint256 debtTakenDay,
+    //     uint256 dailyInterestPoints,
+    //     uint16 payment,
+    //     uint16 daysTo1stPayment,
+    //     uint16 paymentFreq
+    // ) internal pure returns (uint256) {
+    //     // TODO: Polish interest calculation
+    //     // TODO: pre-estimate overflows to avoid them
 
-        uint256 daysLate = (timestamp <= dueDate)
-            ? 0
-            : (timestamp - dueDate) / TIMEFRAME;
+    //     // Due date for Payment
+    //     uint256 dueDate = debtTakenDay +
+    //         daysTo1stPayment *
+    //         TIMEFRAME +
+    //         (payment - 1) *
+    //         paymentFreq *
+    //         TIMEFRAME;
 
-        // Return the amount owed for this payment + apy (+ interests in case of late canceling)
-        return
-            (basePay * (dailyInterestPoints ** daysLate)) / // installment + apy
-            (PRECISION ** daysLate); // interest,  to the power of days late
-    }
+    //     uint256 daysLate = (timestamp <= dueDate)
+    //         ? 0
+    //         : (timestamp - dueDate) / TIMEFRAME;
+
+    //     // console.log("(int) Days Late:", daysLate);
+
+    //     if (daysLate == 0) return 0;
+
+    //     // Return the amount owed for this payment + apy (+ interests in case of late canceling)
+    //     return
+    //         (basePay * (dailyInterestPoints ** daysLate)) /
+    //         (PRECISION ** daysLate);
+    //     // installment + apy multiplied by interest to the power of days late, divided by precision of interest to the power of days late
+    // }
 
     function setURI(string memory newuri) public onlyRole(DEFAULT_ADMIN_ROLE) {
         yagmi.setURI(newuri);
@@ -475,6 +471,9 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
             payment
         );
 
+        // console.log("(retP) baseOwed:", pay);
+        // console.log("(retP) interestOwed:", interests);
+
         // Calculate original base payment without changes
         uint256 basePay = (nftProps.price * nftProps.maxSupply) /
             nftProps.numberOfPayments;
@@ -495,8 +494,16 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
 
         // Update state
         tokens[tokenId].paymentsDone = payment;
-        tokens[tokenId].amountReturned += pay;
-        tokens[tokenId].interestsAccrued += interests;
+        tokens[tokenId].amountReturned = nftProps.amountReturned + pay;
+        tokens[tokenId].interestsAccrued =
+            nftProps.interestsAccrued +
+            interests;
+
+        // console.log("(retP) amountReturned:", tokens[tokenId].amountReturned);
+        // console.log(
+        //     "(retP) interestAccrued:",
+        //     tokens[tokenId].interestsAccrued
+        // );
 
         uint256 totalPayment = pay + interests;
 
@@ -505,11 +512,7 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
             msg.sender,
             address(this)
         );
-        if (currentAllowance < totalPayment)
-            require(
-                IERC20(nftProps.erc20).approve(address(this), totalPayment),
-                "Approve failed"
-            );
+        require(currentAllowance >= totalPayment, "Not enough erc20 allowance");
 
         // Receive the amountToPay of erc20 tokens
         require(
@@ -537,6 +540,11 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
                 nftProps.status == YAGMIStatus.THRESHOLD_UNMET,
             "No BurnOpen/TresholdUnmet status"
         );
+        // Only claim deposit once
+        require(!nftProps.claimedDeposit, "Already claimed");
+
+        tokens[tokenId].claimedDeposit = true;
+
         uint256 depositAmount = (nftProps.price * nftProps.maxSupply) /
             nftProps.ratio;
 
@@ -563,7 +571,7 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
         // totalSupply can't be 0 because balance > 0
 
         uint256 basePrice = nftProps.price +
-            (nftProps.price * nftProps.apy) /
+            (nftProps.price * uint256(nftProps.apy)) /
             PRECISION;
 
         uint256 baseClaim = basePrice * balance;
@@ -586,7 +594,6 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
         // burn tokens
         yagmi.burnOnlyOwner(msg.sender, tokenId, balance);
 
-        // transfer erc20
         // Tranfer (balance * unitPrice) of erc20 tokens to champion
         require(
             IERC20(nftProps.erc20).transfer(
