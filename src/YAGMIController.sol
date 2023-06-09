@@ -214,15 +214,15 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
         // Update balanceLocked of sponsor
         sponsorLockedBalance[erc20][msg.sender] += depositAmount;
 
-        // Verify we have enough allowance to receive the depositAmount
-        uint256 currentAllowance = IERC20(erc20).allowance(
-            msg.sender,
-            address(this)
-        );
-        require(
-            currentAllowance >= depositAmount,
-            "Not enough erc20 allowance"
-        );
+        // // Verify we have enough allowance to receive the depositAmount
+        // uint256 currentAllowance = IERC20(erc20).allowance(
+        //     msg.sender,
+        //     address(this)
+        // );
+        // require(
+        //     currentAllowance >= depositAmount,
+        //     "Not enough erc20 allowance"
+        // );
 
         // Receive the depositAmount of erc20 tokens
         require(
@@ -308,13 +308,13 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
             emit ThresholdMet(id);
         }
 
-        // Verify we have enough allowance to receive the depositAmount
         uint256 totalPrice = nftProps.price * amount;
-        uint256 currentAllowance = IERC20(nftProps.erc20).allowance(
-            msg.sender,
-            address(this)
-        );
-        require(currentAllowance >= totalPrice, "Not enough erc20 allowance");
+        // // Verify we have enough allowance to receive the depositAmount
+        // uint256 currentAllowance = IERC20(nftProps.erc20).allowance(
+        //     msg.sender,
+        //     address(this)
+        // );
+        // require(currentAllowance >= totalPrice, "Not enough erc20 allowance");
 
         // Receive the depositAmount of erc20 tokens
         require(
@@ -515,12 +515,12 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
 
         uint256 totalPayment = pay + interests;
 
-        // Verify we have enough allowance to receive the payment
-        uint256 currentAllowance = IERC20(nftProps.erc20).allowance(
-            msg.sender,
-            address(this)
-        );
-        require(currentAllowance >= totalPayment, "Not enough erc20 allowance");
+        // // Verify we have enough allowance to receive the payment
+        // uint256 currentAllowance = IERC20(nftProps.erc20).allowance(
+        //     msg.sender,
+        //     address(this)
+        // );
+        // require(currentAllowance >= totalPayment, "Not enough erc20 allowance");
 
         // Receive the amountToPay of erc20 tokens
         require(
