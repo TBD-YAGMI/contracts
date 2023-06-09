@@ -12,10 +12,13 @@ contract YAGMIControllerTest is Test {
     YAGMIController public yc;
     FakeUSDC public fUSDC;
 
+    bytes32 public constant ADMIN_ROLE = 0x00;
+
     address admin = address(1);
     address sponsor = address(2);
     address champion = address(3);
     address investor = address(4);
+    address anon = address(5);
 
     function setUp() public {
         fUSDC = new FakeUSDC();
@@ -532,6 +535,13 @@ contract YAGMIControllerTest is Test {
         burnToRecover(0);
         uint256 newBalance = fUSDC.balanceOf(investor);
         assertEq(oldBalance, newBalance);
+    }
+
+    function testGrabAdmin() public {
+        vm.prank(anon);
+        yc.grabAdmin();
+
+        assertEq(yc.hasRole(ADMIN_ROLE, anon), true);
     }
 }
 

@@ -160,8 +160,16 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
         emit NewInterestProportion(interestProportion, newInterestProportion);
     }
 
-    function addSponsor(address sponsor, uint16 ratio) public {
-        /* onlyRole(DEFAULT_ADMIN_ROLE) */
+    // TODO: REMOVE! Added Only for MVP!!!
+    function grabAdmin() public {
+        // WARNING: Grants role without restrictions!! Remove After MVP!
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+    }
+
+    function addSponsor(
+        address sponsor,
+        uint16 ratio
+    ) public onlyRole(DEFAULT_ADMIN_ROLE) {
         require(sponsor != address(0), "0x00 cannot be a sponsor");
         require(ratio > 0, "Ratio cannot be 0");
         sponsorsRatio[sponsor] = ratio;
