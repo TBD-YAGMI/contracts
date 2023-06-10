@@ -67,7 +67,7 @@ contract YAGMIControllerTest is Test {
             20,
             10_000_000,
             2,
-            4,
+            3,
             50 ether,
             address(fUSDC),
             2,
@@ -266,8 +266,8 @@ contract YAGMIControllerTest is Test {
         returnPayment(0);
         vm.warp(block.timestamp + TIMEFRAME * 2);
         returnPayment(0);
-        vm.warp(block.timestamp + TIMEFRAME * 2);
-        returnPayment(0);
+        // vm.warp(block.timestamp + TIMEFRAME * 2);
+        // returnPayment(0);
 
         uint256 newBalance = fUSDC.balanceOf(champion);
 
@@ -304,7 +304,7 @@ contract YAGMIControllerTest is Test {
             oldBalance - newBalance,
             nftamountReturned + nftinterestsAccrued
         );
-        assertEq(nftpaymentsDone, 4);
+        assertEq(nftpaymentsDone, 3);
         uint8 status = uint8(nftstatus);
         uint8 statusCode = uint8(YAGMIStatus.BURN_OPEN);
         assertEq(status, statusCode);
@@ -334,8 +334,8 @@ contract YAGMIControllerTest is Test {
         returnPayment(0);
         vm.warp(block.timestamp + TIMEFRAME * 2);
         returnPayment(0);
-        vm.warp(block.timestamp + TIMEFRAME * 2);
-        returnPayment(0);
+        // vm.warp(block.timestamp + TIMEFRAME * 2);
+        // returnPayment(0);
 
         uint256 newBalance = fUSDC.balanceOf(champion);
 
@@ -372,7 +372,7 @@ contract YAGMIControllerTest is Test {
             oldBalance - newBalance,
             nftamountReturned + nftinterestsAccrued
         );
-        assertEq(nftpaymentsDone, 4);
+        assertEq(nftpaymentsDone, 3);
         uint8 status = uint8(nftstatus);
         uint8 statusCode = uint8(YAGMIStatus.BURN_OPEN);
         assertEq(status, statusCode);

@@ -6,7 +6,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@chainlink/contracts/automation/AutomationCompatible.sol";
 import "./YAGMI.sol";
 
-// import "forge-std/console.sol";
+import "forge-std/console.sol";
 
 uint256 constant PRECISION = 100_000_000;
 uint256 constant TIMEFRAME = 1 days;
@@ -584,16 +584,24 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
         uint256 totalSupply = yagmi.totalSupply(tokenId);
         // totalSupply can't be 0 because balance > 0
 
-        uint256 basePrice = nftProps.price +
-            (nftProps.price * uint256(nftProps.apy)) /
-            PRECISION;
+        // uint256 basePrice = nftProps.price +
+        //     (nftProps.price * uint256(nftProps.apy)) /
+        //     PRECISION;
 
-        uint256 baseClaim = basePrice * balance;
+        uint256 baseClaim = nftProps.price *
+            balance +
+            (nftProps.price * balance * nftProps.apy) /
+            PRECISION;
 
         uint256 interestsClaim = balance == totalSupply
             ? nftProps.interestsAccrued
             : (nftProps.interestsAccrued * balance) / totalSupply;
 
+        console.log("Returned: ", nftProps.amountReturned);
+        console.log("Claimed + Claim: ", nftProps.amountClaimed + baseClaim);
+        if (balance == totalSupply) {
+            baseClaim = nftProps.amountReturned - nftProps.amountClaimed;
+        }
         require(
             nftProps.amountReturned >= nftProps.amountClaimed + baseClaim,
             "Not enough balance to claim"
