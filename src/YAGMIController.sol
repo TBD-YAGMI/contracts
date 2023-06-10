@@ -8,6 +8,9 @@ import "./YAGMI.sol";
 
 // import "forge-std/console.sol";
 
+uint256 constant PRECISION = 100_000_000;
+uint256 constant TIMEFRAME = 1 days;
+
 enum YAGMIStatus {
     EMPTY,
     PROPOSED,
@@ -51,9 +54,6 @@ struct YAGMIProps {
     address sponsor; // Address of the DAO / sponsor for the champion
     // 160 bits -> 1 register
 }
-
-uint256 constant PRECISION = 100_000_000;
-uint256 constant TIMEFRAME = 1 days;
 
 contract YAGMIController is AccessControl, AutomationCompatibleInterface {
     /** Constants */
@@ -415,11 +415,15 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
         // If payed more or equal than is owed, return 0
         if (totalBaseReturned >= loanedBaseLeft) return 0;
 
+        // If it is the last payment, return total - payed to avoid rounding errors
+        if (payment == numberOfPayments)
+            return loanedBaseLeft - totalBaseReturned;
+
         // If debt left is less than a base payment, return only debt
-        return
-            (loanedBaseLeft - totalBaseReturned < basePay)
-                ? loanedBaseLeft - totalBaseReturned
-                : basePay;
+        if (loanedBaseLeft - totalBaseReturned < basePay)
+            return loanedBaseLeft - totalBaseReturned;
+
+        return basePay;
     }
 
     // function _interestOwed(
@@ -487,7 +491,9 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
             nftProps.numberOfPayments;
 
         // Check if this payment finishes the debt
-        uint256 totalReturnedAfterPayment = basePay * payment;
+        uint256 totalReturnedAfterPayment = basePay *
+            nftProps.paymentsDone +
+            pay;
         uint256 tokensLeft = yagmi.totalSupply(tokenId);
         uint256 updatedLoanedAmount = tokensLeft * nftProps.price;
 
