@@ -6,8 +6,6 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@chainlink/contracts/automation/AutomationCompatible.sol";
 import "./YAGMI.sol";
 
-import "forge-std/console.sol";
-
 uint256 constant PRECISION = 100_000_000;
 uint256 constant TIMEFRAME = 1 days;
 
@@ -214,16 +212,6 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
         // Update balanceLocked of sponsor
         sponsorLockedBalance[erc20][msg.sender] += depositAmount;
 
-        // // Verify we have enough allowance to receive the depositAmount
-        // uint256 currentAllowance = IERC20(erc20).allowance(
-        //     msg.sender,
-        //     address(this)
-        // );
-        // require(
-        //     currentAllowance >= depositAmount,
-        //     "Not enough erc20 allowance"
-        // );
-
         // Receive the depositAmount of erc20 tokens
         require(
             IERC20(erc20).transferFrom(
@@ -309,12 +297,6 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
         }
 
         uint256 totalPrice = nftProps.price * amount;
-        // // Verify we have enough allowance to receive the depositAmount
-        // uint256 currentAllowance = IERC20(nftProps.erc20).allowance(
-        //     msg.sender,
-        //     address(this)
-        // );
-        // require(currentAllowance >= totalPrice, "Not enough erc20 allowance");
 
         // Receive the depositAmount of erc20 tokens
         require(
@@ -450,8 +432,6 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
     //         ? 0
     //         : (timestamp - dueDate) / TIMEFRAME;
 
-    //     // console.log("(int) Days Late:", daysLate);
-
     //     if (daysLate == 0) return 0;
 
     //     // Return the amount owed for this payment + apy (+ interests in case of late canceling)
@@ -483,9 +463,6 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
             payment
         );
 
-        // console.log("(retP) baseOwed:", pay);
-        // console.log("(retP) interestOwed:", interests);
-
         // Calculate original base payment without changes
         uint256 basePay = (nftProps.price * nftProps.maxSupply) /
             nftProps.numberOfPayments;
@@ -513,20 +490,7 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
             nftProps.interestsAccrued +
             interests;
 
-        // console.log("(retP) amountReturned:", tokens[tokenId].amountReturned);
-        // console.log(
-        //     "(retP) interestAccrued:",
-        //     tokens[tokenId].interestsAccrued
-        // );
-
         uint256 totalPayment = pay + interests;
-
-        // // Verify we have enough allowance to receive the payment
-        // uint256 currentAllowance = IERC20(nftProps.erc20).allowance(
-        //     msg.sender,
-        //     address(this)
-        // );
-        // require(currentAllowance >= totalPayment, "Not enough erc20 allowance");
 
         // Receive the amountToPay of erc20 tokens
         require(
@@ -551,8 +515,10 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
         // Only after burn is open can the deposit be claimed
         require(
             nftProps.status == YAGMIStatus.BURN_OPEN ||
-                nftProps.status == YAGMIStatus.THRESHOLD_UNMET,
-            "No BurnOpen/TresholdUnmet status"
+                nftProps.status == YAGMIStatus.THRESHOLD_UNMET ||
+                nftProps.status == YAGMIStatus.FINISHED ||
+                nftProps.status == YAGMIStatus.CANCELED,
+            "Deposit not claimable yet"
         );
         // Only claim deposit once
         require(!nftProps.claimedDeposit, "Already claimed");
@@ -584,10 +550,6 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
         uint256 totalSupply = yagmi.totalSupply(tokenId);
         // totalSupply can't be 0 because balance > 0
 
-        // uint256 basePrice = nftProps.price +
-        //     (nftProps.price * uint256(nftProps.apy)) /
-        //     PRECISION;
-
         uint256 baseClaim = nftProps.price *
             balance +
             (nftProps.price * balance * nftProps.apy) /
@@ -597,8 +559,6 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
             ? nftProps.interestsAccrued
             : (nftProps.interestsAccrued * balance) / totalSupply;
 
-        console.log("Returned: ", nftProps.amountReturned);
-        console.log("Claimed + Claim: ", nftProps.amountClaimed + baseClaim);
         if (balance == totalSupply) {
             baseClaim = nftProps.amountReturned - nftProps.amountClaimed;
         }
@@ -660,7 +620,6 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
         // burn tokens
         yagmi.burnOnlyOwner(msg.sender, tokenId, balance);
 
-        // transfer erc20
         // Tranfer (balance * unitPrice) of erc20 tokens to champion
         require(
             IERC20(nftProps.erc20).transfer(msg.sender, baseClaim),
@@ -692,7 +651,6 @@ contract YAGMIController is AccessControl, AutomationCompatibleInterface {
         tokens[tokenId].interestsAccrued = 0;
         tokens[tokenId].amountClaimed = nftProps.amountReturned;
 
-        // transfer erc20
         // Tranfer (balance * unitPrice) of erc20 tokens to champion
         require(
             IERC20(nftProps.erc20).transfer(
